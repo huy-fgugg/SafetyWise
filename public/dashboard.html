@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafetyWise Console</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="logo">S</span> SafetyWise</div>
+    <nav class="nav" id="nav">
+      <a data-view="overview" class="active">📊 Overview</a>
+      <a data-view="monitor">🖥️ Live classroom</a>
+      <a data-view="students">🎓 Students</a>
+      <a data-view="classes" data-admin>🏫 Classes</a>
+      <a data-view="teachers" data-admin>👩‍🏫 Teachers</a>
+      <a data-view="filtering" data-admin>🛡️ Web filtering</a>
+      <a data-view="alerts">🚨 Alerts</a>
+      <a data-view="setup" data-admin>⚙️ Extension setup</a>
+    </nav>
+    <div class="spacer"></div>
+    <div class="who" id="who"></div>
+    <button class="ghost sm" id="logout" style="margin-top:8px">Sign out</button>
+  </aside>
+  <main class="main" id="main"><p class="muted">Loading…</p></main>
+</div>
+<div id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SafetyWise — Sign in</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand"><span class="logo">S</span> SafetyWise</div>
+    <h1>Sign in to console</h1>
+    <p class="sub">Classroom safety &amp; management console for administrators and teachers.</p>
+    <form id="loginForm">
+      <label for="u">Username</label>
+      <input id="u" autocomplete="username" value="admin" required>
+      <label for="p">Password</label>
+      <input id="p" type="password" autocomplete="current-password" value="admin" required>
+      <div class="err" id="err"></div>
+      <button class="full" type="submit">Sign in</button>
+    </form>
+    <p class="sub" style="margin-top:16px;font-size:12px">Demo admin: <strong>admin</strong> / <strong>admin</strong></p>
+  </div>
+</div>
+<script>
+const f = document.getElementById('loginForm');
+f.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  document.getElementById('err').textContent = '';
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: u.value, password: p.value }) });
+  const d = await r.json();
+  if (!r.ok) { document.getElementById('err').textContent = d.error || 'Sign in failed'; return; }
+  localStorage.setItem('sw_token', d.token);
+  localStorage.setItem('sw_role', d.role);
+  localStorage.setItem('sw_name', d.name || d.username);
+  location.href = '/dashboard.html';
+});
+if (localStorage.getItem('sw_token')) location.href = '/dashboard.html';
+</script>
+</body>
+</html>

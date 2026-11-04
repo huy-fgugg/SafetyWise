@@ -1,0 +1,12 @@
+{
+  "name": "safetywise",
+  "version": "1.0.0",
+  "description": "SafetyWise — classroom safety & management console (admin + teacher) with a Chrome extension agent.",
+  "scripts": {
+    "dev": "node server/server.js",
+    "cf:dev": "wrangler pages dev public",
+    "cf:kv": "wrangler kv namespace create SAFETYWISE_KV",
+    "deploy": "wrangler pages deploy public"
+  },
+  "license": "MIT"
+}

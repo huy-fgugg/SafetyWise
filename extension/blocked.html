@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site blocked — SafetyWise</title>
+<style>
+  body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f1420;color:#e8edf6;font-family:system-ui,sans-serif;text-align:center;padding:24px}
+  .logo{width:60px;height:60px;border-radius:14px;background:linear-gradient(135deg,#3b82f6,#22d3ee);display:grid;place-items:center;color:#04121f;font-weight:900;font-size:30px;margin:0 auto 20px}
+  h1{font-size:26px;margin:0 0 10px}
+  p{color:#8b97ad;max-width:440px;margin:6px auto;font-size:15px;line-height:1.5}
+  .url{margin-top:16px;font-size:13px;color:#5f6b80;word-break:break-all}
+  .card{background:#171e2e;border:1px solid #2a3348;border-radius:16px;padding:36px 32px;max-width:480px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">S</div>
+    <h1>This site is blocked</h1>
+    <p id="reason">This page is restricted by your school's SafetyWise web-filter policy.</p>
+    <p class="muted">If you think this is a mistake, ask your teacher or administrator.</p>
+    <div class="url" id="url"></div>
+  </div>
+<script>
+  const q = new URLSearchParams(location.search);
+  if (q.get('r')) document.getElementById('reason').textContent = q.get('r');
+  if (q.get('u')) document.getElementById('url').textContent = q.get('u');
+</script>
+</body>
+</html>
