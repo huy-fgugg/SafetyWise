@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="0; url=/login">
+<title>SafetyWise</title>
+<script>location.replace(localStorage.getItem('sw_token') ? '/dashboard' : '/login');</script>
+</head>
+<body>Redirecting to <a href="/login">SafetyWise sign in</a>…</body>
+</html>
