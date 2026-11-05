@@ -300,6 +300,7 @@ const server = http.createServer(async (req, res) => {
         mode: b.mode === 'whitelist' ? 'whitelist' : 'blacklist',
         block: (b.block || []).map(x => String(x).trim()).filter(Boolean),
         allow: (b.allow || []).map(x => String(x).trim()).filter(Boolean),
+        focus: (b.focus || []).map(x => String(x).trim()).filter(Boolean),
         owner: user.username, createdAt: Date.now()
       };
       state.scenes = state.scenes || []; state.scenes.push(sc); db.save();

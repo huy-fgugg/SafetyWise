@@ -44,7 +44,9 @@ function className(id) { const c = (STATE.classes || []).find(c => c.id === id);
 function online(s) { return s.lastSeen && (Date.now() - s.lastSeen < 90000); }
 
 let monTimers = [];
+let monClass = '';
 function clearMonTimers() { monTimers.forEach(t => clearInterval(t)); monTimers = []; }
+async function bulkCommand(ids, payload) { for (const id of ids) { try { await api('/api/command', 'POST', Object.assign({ studentId: id }, payload)); } catch {} } }
 
 function render() {
   if (!STATE) return;
@@ -96,18 +98,35 @@ function favicon(url) { const h = hostOf(url); return h ? `https://www.google.co
 function renderMonitor() {
   const s = STATE;
   const active = s.activeScene ? (s.scenes || []).find(x => x.id === s.activeScene) : null;
+  const students = monClass ? s.students.filter(x => x.classId === monClass) : s.students;
   main.innerHTML = head('Classroom', '<span class="live"><span class="dot on"></span>live</span>') + `
     <div class="scenebar ${active ? 'on' : ''}" id="sceneBar">
       ${active ? `<span>🎬 Scene active: <strong>${esc(active.name)}</strong> (${active.mode})</span><button class="sm" id="sceneOff">Stop scene</button>`
         : `<span class="muted">No scene running — base web-filter rules apply.</span><button class="sm ghost" data-goto="scenes">Manage scenes</button>`}
     </div>
+    <div class="classbar">
+      <select id="monClassSel">
+        <option value="">All classes (${s.students.length})</option>
+        ${s.classes.map(c => `<option value="${c.id}" ${monClass === c.id ? 'selected' : ''}>${esc(c.name)} (${s.students.filter(x => x.classId === c.id).length})</option>`).join('')}
+      </select>
+      <div class="row" style="gap:6px">
+        <span class="muted" style="font-size:12px">${students.length} student${students.length === 1 ? '' : 's'} →</span>
+        <button class="sm warn" data-bulk="lock">🔒 Lock all</button>
+        <button class="sm ghost" data-bulk="unlock">🔓 Unlock all</button>
+        <button class="sm ghost" data-bulk="focus">🎯 Focus all…</button>
+        <button class="sm ghost" data-bulk="focusoff">Stop focus</button>
+        <button class="sm ghost" data-bulk="msg">💬 Message all</button>
+      </div>
+    </div>
     <div class="classgrid" id="monGrid">
-    ${s.students.map(st => renderStudentCard(st)).join('') || '<p class="muted">No students enrolled yet. Add students, then enroll a device with its code.</p>'}
+    ${students.map(st => renderStudentCard(st)).join('') || '<p class="muted">No students here yet. Add students, then enroll a device with its code.</p>'}
     </div>
     <div id="detailModal" class="modal hidden"><div class="modal-card"><button class="modal-x" id="detailX">✕</button><div id="detailBody"></div></div></div>`;
   bindMonitor();
   if (document.getElementById('sceneOff')) document.getElementById('sceneOff').onclick = async () => { await api('/api/scenes/activate', 'POST', { id: null }); toast('Scene stopped'); await refresh(); };
   main.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => { currentView = b.dataset.goto; document.querySelectorAll('#nav a').forEach(x => x.classList.toggle('active', x.dataset.view === currentView)); render(); });
+  document.getElementById('monClassSel').onchange = e => { monClass = e.target.value; render(); };
+  main.querySelectorAll('button[data-bulk]').forEach(b => b.onclick = () => bulkAction(b.dataset.bulk, students.map(x => x.id)));
   monTimers.push(setInterval(softUpdateMonitor, 4000));
 }
 
@@ -256,6 +275,16 @@ function openDetail(id) {
   modal.onclick = e => { if (e.target === modal) modal.classList.add('hidden'); };
 }
 
+async function bulkAction(act, ids) {
+  if (!ids.length) return toast('No students in this view');
+  if (act === 'lock') { if (!confirm(`Lock ${ids.length} device(s) to a fullscreen screen?`)) return; await bulkCommand(ids, { lock: true }); toast('Locked all'); }
+  if (act === 'unlock') { await bulkCommand(ids, { lock: false }); toast('Unlocked all'); }
+  if (act === 'focus') { const v = prompt('Focus the class to these sites (comma-separated). Only these stay open on every device:'); if (v == null) return; const urls = v.split(',').map(s => s.trim()).filter(Boolean); await bulkCommand(ids, { lockedTabs: urls }); toast(urls.length ? 'Focus applied to class' : 'Focus off'); }
+  if (act === 'focusoff') { await bulkCommand(ids, { lockedTabs: [] }); toast('Focus stopped'); }
+  if (act === 'msg') { const m = prompt('Message to send to the whole class:'); if (m == null) return; await bulkCommand(ids, { message: m }); toast('Message sent to class'); }
+  await refresh();
+}
+
 async function monitorAction(act, id) {
   const cmd = STATE.commands[id] || {};
   if (act === 'lock') await api('/api/command', 'POST', { studentId: id, lock: !cmd.lock });
@@ -277,6 +306,9 @@ function renderScenes() {
         <div><label>⛔ Blocked sites (one per line)</label><textarea id="scBlock" rows="4" placeholder="game-site.com&#10;youtube.com"></textarea></div>
         <div><label>✅ Allowed sites (one per line)</label><textarea id="scAllow" rows="4" placeholder="wikipedia.org&#10;classroom.google.com"></textarea></div>
       </div>
+      <label style="margin-top:10px">🎯 Focus tabs (optional) — one per line</label>
+      <p class="muted" style="font-size:12px;margin:0 0 6px">If set, running this scene puts every device into focus mode: it opens only these sites and closes the rest (students can't close them).</p>
+      <textarea id="scFocus" rows="3" placeholder="quiz.example.com&#10;classroom.google.com"></textarea>
       <div class="row end" style="margin-top:10px"><button id="scAdd">Create scene</button></div>
     </div>
     <div class="grid cards">
@@ -285,7 +317,7 @@ function renderScenes() {
         <strong>🎬 ${esc(sc.name)}</strong>
         ${s.activeScene === sc.id ? '<span class="tag allow">running</span>' : ''}
       </div>
-      <div class="muted" style="font-size:12px;margin:6px 0">${sc.mode} · ${(sc.block || []).length} blocked · ${(sc.allow || []).length} allowed</div>
+      <div class="muted" style="font-size:12px;margin:6px 0">${sc.mode} · ${(sc.block || []).length} blocked · ${(sc.allow || []).length} allowed${(sc.focus || []).length ? ` · 🎯 ${(sc.focus || []).length} focus` : ''}</div>
       <div class="row" style="gap:6px;margin-top:8px">
         ${s.activeScene === sc.id
           ? `<button class="sm warn" data-stop="1">Stop</button>`
@@ -296,11 +328,20 @@ function renderScenes() {
     </div>`;
   document.getElementById('scAdd').onclick = async () => {
     const name = scName.value.trim(); if (!name) return toast('Name required');
-    await api('/api/scenes', 'POST', { name, mode: scMode.value, block: scBlock.value.split('\n'), allow: scAllow.value.split('\n') });
+    await api('/api/scenes', 'POST', { name, mode: scMode.value, block: scBlock.value.split('\n'), allow: scAllow.value.split('\n'), focus: scFocus.value.split('\n') });
     toast('Scene created'); await refresh();
   };
-  main.querySelectorAll('button[data-run]').forEach(b => b.onclick = async () => { await api('/api/scenes/activate', 'POST', { id: b.dataset.run }); toast('Scene running'); await refresh(); });
-  main.querySelectorAll('button[data-stop]').forEach(b => b.onclick = async () => { await api('/api/scenes/activate', 'POST', { id: null }); toast('Scene stopped'); await refresh(); });
+  main.querySelectorAll('button[data-run]').forEach(b => b.onclick = async () => {
+    const sc = (STATE.scenes || []).find(x => x.id === b.dataset.run);
+    await api('/api/scenes/activate', 'POST', { id: b.dataset.run });
+    if (sc && (sc.focus || []).length) await bulkCommand(STATE.students.map(x => x.id), { lockedTabs: sc.focus });
+    toast('Scene running' + (sc && sc.focus && sc.focus.length ? ' + focus applied' : '')); await refresh();
+  });
+  main.querySelectorAll('button[data-stop]').forEach(b => b.onclick = async () => {
+    await api('/api/scenes/activate', 'POST', { id: null });
+    await bulkCommand(STATE.students.map(x => x.id), { lockedTabs: [] });
+    toast('Scene stopped'); await refresh();
+  });
   main.querySelectorAll('button[data-delscene]').forEach(b => b.onclick = async () => { if (!confirm('Delete scene?')) return; await api('/api/scenes/' + b.dataset.delscene, 'DELETE'); await refresh(); });
 }
 

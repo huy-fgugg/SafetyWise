@@ -217,6 +217,7 @@ export async function onRequest(context) {
           mode: body.mode === 'whitelist' ? 'whitelist' : 'blacklist',
           block: (body.block || []).map(x => String(x).trim()).filter(Boolean),
           allow: (body.allow || []).map(x => String(x).trim()).filter(Boolean),
+          focus: (body.focus || []).map(x => String(x).trim()).filter(Boolean),
           owner: user.username, createdAt: Date.now()
         };
         state.scenes = state.scenes || []; state.scenes.push(sc);
