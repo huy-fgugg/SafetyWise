@@ -72,16 +72,27 @@ async function doUnlink() {
   for (const t of tabs) { if (t.id && /^https?:/.test(t.url || '')) { try { await chrome.tabs.sendMessage(t.id, { type: 'sw-state', lock: false, message: '' }); } catch {} } }
 }
 
+// Enforcement state kept in the service worker (refreshed on every report).
+let enforce = { lock: false, lockedTabs: null };
+let lockWasOn = false;
+
 async function applyCommands(cmd, tabId, url) {
   // Unlink: admin released this device — clear everything and return to setup.
-  if (cmd.unlink) { await doUnlink(); return; }
-  // Block current page
-  if (cmd.block && tabId != null && url && !url.startsWith(chrome.runtime.getURL(''))) {
+  if (cmd.unlink) { enforce = { lock: false, lockedTabs: null }; await doUnlink(); return; }
+
+  enforce.lock = !!cmd.lock;
+  enforce.lockedTabs = (Array.isArray(cmd.lockedTabs) && cmd.lockedTabs.length) ? cmd.lockedTabs.slice() : null;
+
+  // Message -> pops up as a new tab message box (one-shot). Skip while fully locked.
+  if (cmd.message && !enforce.lock) {
+    try { await chrome.tabs.create({ url: chrome.runtime.getURL('message.html') + '?text=' + encodeURIComponent(cmd.message) }); } catch {}
+  }
+  // Block the current page (not while fully locked).
+  if (!enforce.lock && cmd.block && tabId != null && url && !url.startsWith(chrome.runtime.getURL(''))) {
     const dest = chrome.runtime.getURL('blocked.html') + '?u=' + encodeURIComponent(url) + '&r=' + encodeURIComponent(cmd.block.note || 'Blocked');
     try { await chrome.tabs.update(tabId, { url: dest }); } catch {}
-    return;
   }
-  // Focus a specific tab on the student's device (teacher clicked "Open" in the tab list)
+  // Open a specific tab on the student's device.
   if (cmd.focusTab) {
     try {
       let target = null;
@@ -90,21 +101,55 @@ async function applyCommands(cmd, tabId, url) {
       if (target && target.id != null) { await chrome.tabs.update(target.id, { active: true }); if (target.windowId != null) await chrome.windows.update(target.windowId, { focused: true }); }
     } catch {}
   }
-  // Close tab command (one-shot)
-  if (cmd.closeTab && tabId != null) { try { await chrome.tabs.remove(tabId); } catch {} }
-  // Lock: show overlay via content script on all tabs
-  const tabs = await chrome.tabs.query({});
+  // Close current tab (one-shot, not while locked).
+  if (!enforce.lock && cmd.closeTab && tabId != null) { try { await chrome.tabs.remove(tabId); } catch {} }
+
+  await applyEnforcement();
+}
+
+function withProto(u) { return /^https?:\/\//.test(u) ? u : 'https://' + String(u).replace(/^\/+/, ''); }
+function urlMatchesAny(u, list) { u = (u || '').toLowerCase(); return list.some(a => a && u.includes(String(a).toLowerCase())); }
+
+// Full-screen device lockdown: one lock page, everything else closed, window fullscreen.
+async function openLockPage() {
+  const lockUrl = chrome.runtime.getURL('lock.html');
+  let tabs = await chrome.tabs.query({});
+  let lockTab = tabs.find(t => (t.url || '').startsWith(lockUrl));
+  if (!lockTab) lockTab = await chrome.tabs.create({ url: lockUrl });
+  tabs = await chrome.tabs.query({});
+  for (const t of tabs) { if (t.id !== lockTab.id) { try { await chrome.tabs.remove(t.id); } catch {} } }
+  try { await chrome.windows.update(lockTab.windowId, { focused: true, state: 'fullscreen' }); } catch {}
+}
+
+// Focus mode: open only the allowed tabs, close the rest, reopen allowed ones if closed.
+async function applyFocus(list) {
+  let tabs = await chrome.tabs.query({});
+  for (const u of list) { if (!tabs.some(t => (t.url || '').toLowerCase().includes(String(u).toLowerCase()))) { try { await chrome.tabs.create({ url: withProto(u) }); } catch {} } }
+  tabs = await chrome.tabs.query({});
   for (const t of tabs) {
-    if (!t.id || !/^https?:/.test(t.url || '')) continue;
-    try { await chrome.tabs.sendMessage(t.id, { type: 'sw-state', lock: !!cmd.lock, message: cmd.message || '' }); } catch {}
+    if (!/^https?:/.test(t.url || '')) continue;
+    if (!urlMatchesAny(t.url, list)) { try { await chrome.tabs.remove(t.id); } catch {} }
   }
 }
+
+async function applyEnforcement() {
+  try {
+    if (enforce.lock) { await openLockPage(); lockWasOn = true; return; }
+    if (lockWasOn) { lockWasOn = false; try { const wins = await chrome.windows.getAll(); for (const w of wins) await chrome.windows.update(w.id, { state: 'normal' }); } catch {} }
+    if (enforce.lockedTabs) await applyFocus(enforce.lockedTabs);
+  } catch (e) {}
+}
+
+let enforceTimer = null;
+function scheduleEnforce() { if (!(enforce.lock || enforce.lockedTabs)) return; clearTimeout(enforceTimer); enforceTimer = setTimeout(() => applyEnforcement(), 200); }
 
 chrome.runtime.onInstalled.addListener(() => { enroll(); chrome.alarms.create('report', { periodInMinutes: 0.1 }); });
 chrome.runtime.onStartup.addListener(() => { enroll(); chrome.alarms.create('report', { periodInMinutes: 0.1 }); });
 chrome.alarms.onAlarm.addListener(a => { if (a.name === 'report') report(); });
 chrome.tabs.onActivated.addListener(() => report());
-chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === 'complete' || info.url) report(); });
+chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === 'complete' || info.url) { report(); scheduleEnforce(); } });
+chrome.tabs.onCreated.addListener(() => scheduleEnforce());
+chrome.tabs.onRemoved.addListener(() => scheduleEnforce());
 
 // allow popup/content to query state
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

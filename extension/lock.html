@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Device locked — SafetyWise</title>
+<style>
+  html,body{height:100%;margin:0;overflow:hidden}
+  body{display:grid;place-items:center;background:#0f1420;color:#e8edf6;font-family:system-ui,sans-serif;text-align:center;cursor:none;user-select:none}
+  .logo{width:72px;height:72px;border-radius:18px;background:linear-gradient(135deg,#2563eb,#0ea5e9);display:grid;place-items:center;color:#fff;font-weight:900;font-size:38px;margin:0 auto 22px}
+  h1{font-size:30px;margin:0 0 10px}
+  p{color:#8b97ad;font-size:16px;max-width:420px;margin:6px auto}
+</style>
+</head>
+<body>
+  <div>
+    <div class="logo">S</div>
+    <h1>Your screen is locked</h1>
+    <p>Your teacher has paused this device. Please look up front.</p>
+    <p id="msg" style="margin-top:16px;color:#e8edf6"></p>
+  </div>
+<script>
+  // Try to stay fullscreen and discourage navigating away.
+  function goFull(){ try{ document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); }catch(e){} }
+  document.addEventListener('click', goFull);
+  document.addEventListener('keydown', e => { e.preventDefault(); });
+  document.addEventListener('contextmenu', e => e.preventDefault());
+  window.addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; });
+</script>
+</body>
+</html>

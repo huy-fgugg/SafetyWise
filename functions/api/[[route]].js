@@ -125,7 +125,7 @@ export async function onRequest(context) {
     const reason = blockReason(state, body.url);
     if (reason) logAlert(state, sid, 'block', { url: body.url, reason });
     const cmd = state.commands[sid] || {};
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, unlink: !!cmd.unlink, focusTab: cmd.focusTab || null };
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, unlink: !!cmd.unlink, focusTab: cmd.focusTab || null, lockedTabs: cmd.lockedTabs || null };
     if (cmd.closeTab) cmd.closeTab = false;
     if (cmd.message) cmd.message = '';
     if (cmd.focusTab) cmd.focusTab = null;
@@ -243,6 +243,7 @@ export async function onRequest(context) {
         if ('closeTab' in body) cmd.closeTab = !!body.closeTab;
         if ('unlink' in body) cmd.unlink = !!body.unlink;
         if ('focusTab' in body) cmd.focusTab = body.focusTab || null;
+        if ('lockedTabs' in body) cmd.lockedTabs = Array.isArray(body.lockedTabs) && body.lockedTabs.length ? body.lockedTabs.map(x => String(x).trim()).filter(Boolean) : null;
         state.commands[sid] = cmd; await saveState(env, state); return json({ ok: true, command: cmd });
       }
       if (p === '/api/admins' && method === 'POST') {

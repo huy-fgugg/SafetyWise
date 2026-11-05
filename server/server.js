@@ -145,7 +145,7 @@ const server = http.createServer(async (req, res) => {
     if (reason) logAlert(state, sid, 'block', { url: b.url, reason });
     const cmd = state.commands[sid] || {};
     // consume one-shot commands
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, unlink: !!cmd.unlink, focusTab: cmd.focusTab || null };
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, unlink: !!cmd.unlink, focusTab: cmd.focusTab || null, lockedTabs: cmd.lockedTabs || null };
     if (cmd.closeTab) { cmd.closeTab = false; }
     if (cmd.message) { cmd.message = ''; }
     if (cmd.focusTab) { cmd.focusTab = null; }
@@ -272,6 +272,7 @@ const server = http.createServer(async (req, res) => {
       if ('closeTab' in b) cmd.closeTab = !!b.closeTab;
       if ('unlink' in b) cmd.unlink = !!b.unlink;
       if ('focusTab' in b) cmd.focusTab = b.focusTab || null;
+      if ('lockedTabs' in b) cmd.lockedTabs = Array.isArray(b.lockedTabs) && b.lockedTabs.length ? b.lockedTabs.map(x => String(x).trim()).filter(Boolean) : null;
       state.commands[sid] = cmd; db.save();
       return send(res, 200, { ok: true, command: cmd });
     }

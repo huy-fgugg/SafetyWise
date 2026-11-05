@@ -103,7 +103,8 @@ function renderMonitor() {
     </div>
     <div class="classgrid" id="monGrid">
     ${s.students.map(st => renderStudentCard(st)).join('') || '<p class="muted">No students enrolled yet. Add students, then enroll a device with its code.</p>'}
-    </div>`;
+    </div>
+    <div id="detailModal" class="modal hidden"><div class="modal-card"><button class="modal-x" id="detailX">✕</button><div id="detailBody"></div></div></div>`;
   bindMonitor();
   if (document.getElementById('sceneOff')) document.getElementById('sceneOff').onclick = async () => { await api('/api/scenes/activate', 'POST', { id: null }); toast('Scene stopped'); await refresh(); };
   main.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => { currentView = b.dataset.goto; document.querySelectorAll('#nav a').forEach(x => x.classList.toggle('active', x.dataset.view === currentView)); render(); });
@@ -115,11 +116,12 @@ function renderStudentCard(st) {
   const a = s.activity[st.id]; const cmd = s.commands[st.id] || {};
   const tabs = (a && a.tabs) ? a.tabs.filter(t => /^https?:/.test(t.url || '')) : [];
   const cur = a ? { title: a.title, url: a.url } : null;
+  const badge = cmd.lock ? '<span class="tag block">locked</span>' : (cmd.lockedTabs ? '<span class="tag">focus</span>' : '');
   return `<div class="card studentcard" id="card_${st.id}">
-    <div class="sc-head">
+    <div class="sc-head" data-detail="${st.id}" title="Open details">
       <div class="row" style="gap:8px">
         <span class="dot ${online(st) ? 'on' : 'off'}"></span>
-        <strong>${esc(st.name)}</strong>
+        <strong>${esc(st.name)}</strong> ${badge}
       </div>
       <span class="muted" style="font-size:11px" id="time_${st.id}">${st.lastSeen ? timeAgo(st.lastSeen) : '—'}</span>
     </div>
@@ -168,6 +170,7 @@ function isBlockedNow(url) {
 }
 
 function bindMonitor() {
+  main.querySelectorAll('[data-detail]').forEach(el => el.onclick = () => openDetail(el.dataset.detail));
   main.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => monitorAction(b.dataset.act, b.dataset.id));
   main.querySelectorAll('button[data-open]').forEach(b => b.onclick = async () => {
     const id = b.dataset.open, tabid = b.dataset.tabid, url = b.dataset.url;
@@ -202,6 +205,55 @@ async function softUpdateMonitor() {
     }
     bindMonitor();
   } catch {}
+}
+
+function openDetail(id) {
+  const modal = document.getElementById('detailModal');
+  const bodyEl = document.getElementById('detailBody');
+  if (!modal || !bodyEl) return;
+  function build() {
+    const st = STATE.students.find(x => x.id === id); if (!st) { modal.classList.add('hidden'); return; }
+    const a = STATE.activity[id]; const cmd = STATE.commands[id] || {};
+    const tabs = (a && a.tabs) ? a.tabs.filter(t => /^https?:/.test(t.url || '')) : [];
+    const locked = Array.isArray(cmd.lockedTabs) ? cmd.lockedTabs : [];
+    bodyEl.innerHTML = `
+      <div class="row" style="gap:8px;align-items:center"><span class="dot ${online(st) ? 'on' : 'off'}"></span><h3 style="margin:0">${esc(st.name)}</h3>
+        ${cmd.lock ? '<span class="tag block">locked</span>' : cmd.lockedTabs ? '<span class="tag">focus mode</span>' : ''}</div>
+      <div class="muted" style="font-size:12px;margin:4px 0 14px">${esc(className(st.classId))} · ${st.lastSeen ? timeAgo(st.lastSeen) : 'never seen'} · code ${esc(st.code || '—')}</div>
+
+      <div class="row" style="gap:6px;margin-bottom:16px">
+        <button class="${cmd.lock ? 'warn' : ''}" data-d="lock">${cmd.lock ? '🔓 Unlock device' : '🔒 Lock device (fullscreen)'}</button>
+        <button class="ghost" data-d="msg">💬 Message</button>
+        <button class="ghost" data-d="close">✕ Close current tab</button>
+      </div>
+
+      <h4 style="margin:0 0 6px">Open tabs <span class="muted">(${tabs.length})</span></h4>
+      <div class="tablist" style="max-height:220px">${tabs.map(t => tabRow(id, t)).join('') || '<div class="muted" style="padding:8px;font-size:13px">No open tabs reported.</div>'}</div>
+
+      <h4 style="margin:16px 0 4px">🎯 Focus mode — allow only these tabs</h4>
+      <p class="muted" style="font-size:12px;margin:0 0 8px">The device opens only these sites and closes the rest; the student can't close them. One URL per line. Leave empty and click Apply to turn focus off.</p>
+      <textarea id="dFocus" rows="4" placeholder="classroom.google.com&#10;docs.google.com">${esc(locked.join('\n'))}</textarea>
+      <div class="row end" style="margin-top:8px;gap:6px">
+        ${cmd.lockedTabs ? '<button class="ghost" data-d="focusoff">Turn off focus</button>' : ''}
+        <button data-d="focus">Apply focus</button>
+      </div>`;
+    bodyEl.querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { await api('/api/command', 'POST', { studentId: id, focusTab: { id: b.dataset.tabid ? Number(b.dataset.tabid) : null, url: b.dataset.url } }); toast('Opening tab on device'); });
+    bodyEl.querySelectorAll('[data-block]').forEach(b => b.onclick = async () => { await api('/api/filters', 'POST', { type: 'block', pattern: b.dataset.block }); toast('Blocked ' + b.dataset.block); await refresh(); build(); });
+    bodyEl.querySelectorAll('[data-allow]').forEach(b => b.onclick = async () => { await api('/api/filters', 'POST', { type: 'allow', pattern: b.dataset.allow }); toast('Unblocked ' + b.dataset.allow); await refresh(); build(); });
+    bodyEl.querySelectorAll('[data-d]').forEach(b => b.onclick = async () => {
+      const act = b.dataset.d;
+      if (act === 'lock') await api('/api/command', 'POST', { studentId: id, lock: !cmd.lock });
+      if (act === 'close') await api('/api/command', 'POST', { studentId: id, closeTab: true });
+      if (act === 'msg') { const m = prompt('Message to send to student:'); if (m == null) return; await api('/api/command', 'POST', { studentId: id, message: m }); toast('Message sent'); return; }
+      if (act === 'focus') { const urls = document.getElementById('dFocus').value.split('\n').map(s => s.trim()).filter(Boolean); await api('/api/command', 'POST', { studentId: id, lockedTabs: urls }); toast(urls.length ? 'Focus mode applied' : 'Focus mode off'); }
+      if (act === 'focusoff') await api('/api/command', 'POST', { studentId: id, lockedTabs: [] });
+      await refresh(); build();
+    });
+  }
+  build();
+  modal.classList.remove('hidden');
+  document.getElementById('detailX').onclick = () => modal.classList.add('hidden');
+  modal.onclick = e => { if (e.target === modal) modal.classList.add('hidden'); };
 }
 
 async function monitorAction(act, id) {

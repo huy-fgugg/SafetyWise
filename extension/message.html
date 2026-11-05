@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Message from your teacher — SafetyWise</title>
+<style>
+  html,body{height:100%;margin:0}
+  body{display:grid;place-items:center;background:#0f1420;color:#e8edf6;font-family:system-ui,sans-serif;padding:24px}
+  .card{background:#171e2e;border:1px solid #2a3348;border-radius:18px;padding:34px 30px;max-width:480px;text-align:center}
+  .logo{width:56px;height:56px;border-radius:14px;background:linear-gradient(135deg,#2563eb,#0ea5e9);display:grid;place-items:center;color:#fff;font-weight:900;font-size:28px;margin:0 auto 16px}
+  h1{font-size:18px;margin:0 0 14px;color:#8b97ad;font-weight:600}
+  .msg{font-size:22px;line-height:1.4;margin:0 0 22px}
+  button{padding:11px 22px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;font-size:15px;cursor:pointer}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">S</div>
+    <h1>Message from your teacher</h1>
+    <div class="msg" id="msg"></div>
+    <button id="ok">OK</button>
+  </div>
+<script>
+  const text = new URLSearchParams(location.search).get('text') || '';
+  document.getElementById('msg').textContent = text;
+  document.getElementById('ok').onclick = () => { try { window.close(); } catch(e){} };
+</script>
+</body>
+</html>
