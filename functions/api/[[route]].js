@@ -13,6 +13,7 @@ function defaults() {
     filters: [{ id: 'f_default_1', type: 'block', pattern: 'malware.example', category: 'Security', note: 'Sample blocked site' }],
     categories: { 'Gaming': false, 'Social Media': false, 'Streaming Video': false, 'Adult Content': true, 'Security Threats': true },
     alertKeywords: ['violence', 'self-harm', 'weapon'],
+    filterMode: 'blacklist', // 'blacklist' = block listed sites; 'whitelist' = allow ONLY listed sites
     activity: {},
     commands: {},
     alerts: [],
@@ -44,9 +45,16 @@ async function getSession(env, req) {
 
 function blockReason(state, url) {
   const u = (url || '').toLowerCase();
-  for (const f of state.filters) if (f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase())) return null;
-  for (const f of state.filters) if (f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()))
-    return { pattern: f.pattern, note: f.note || 'Blocked by policy', category: f.category || '' };
+  // Allow (whitelist) rules always win.
+  const allowHit = state.filters.some(f => f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase()));
+  if (allowHit) return null;
+  if ((state.filterMode || 'blacklist') === 'whitelist') {
+    // Whitelist mode: everything not explicitly allowed is blocked.
+    return { pattern: '', note: 'Only school-approved sites are allowed', category: 'Whitelist' };
+  }
+  // Blacklist mode: block only listed sites.
+  const blk = state.filters.find(f => f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()));
+  if (blk) return { pattern: blk.pattern, note: blk.note || 'Blocked by policy', category: blk.category || '' };
   return null;
 }
 function logAlert(state, studentId, kind, detail) {
@@ -108,12 +116,22 @@ export async function onRequest(context) {
     const reason = blockReason(state, body.url);
     if (reason) logAlert(state, sid, 'block', { url: body.url, reason });
     const cmd = state.commands[sid] || {};
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab };
+    const watch = await env.SAFETYWISE_KV.get('watch');
+    const capture = !!(watch && Date.now() < Number(watch));
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture };
     if (cmd.closeTab) cmd.closeTab = false;
     if (cmd.message) cmd.message = '';
     state.commands[sid] = cmd;
     await saveState(env, state);
     return json(out);
+  }
+
+  // Receive a screen snapshot from an agent (stored briefly, separate from state).
+  if (p === '/api/agent/screenshot' && method === 'POST') {
+    if (!body.studentId || !body.img) return json({ error: 'bad snapshot' }, 400);
+    await env.SAFETYWISE_KV.put('shot:' + body.studentId, JSON.stringify({ img: body.img, at: Date.now() }), { expirationTtl: 60 });
+    const watch = await env.SAFETYWISE_KV.get('watch');
+    return json({ ok: true, keep: !!(watch && Date.now() < Number(watch)) });
   }
 
   // ---- Authenticated dashboard API ----
@@ -129,7 +147,7 @@ export async function onRequest(context) {
           admins: state.admins.map(a => ({ id: a.id, username: a.username, name: a.name, isOwner: a.isOwner })),
           teachers: state.teachers.map(t => ({ id: t.id, username: t.username, name: t.name, classIds: t.classIds || [] })),
           students: state.students, classes: state.classes, filters: state.filters,
-          categories: state.categories, alertKeywords: state.alertKeywords,
+          categories: state.categories, alertKeywords: state.alertKeywords, filterMode: state.filterMode || 'blacklist',
           activity: state.activity, commands: state.commands, alerts: state.alerts.slice(0, 100),
           enrollToken: isAdmin ? state.enrollToken : undefined
         });
@@ -184,6 +202,11 @@ export async function onRequest(context) {
         if (Array.isArray(body.keywords)) state.alertKeywords = body.keywords.map(s => String(s).trim()).filter(Boolean);
         await saveState(env, state); return json({ ok: true });
       }
+      if (p === '/api/filtermode' && method === 'POST') {
+        requireAdmin();
+        state.filterMode = body.mode === 'whitelist' ? 'whitelist' : 'blacklist';
+        await saveState(env, state); return json({ ok: true, filterMode: state.filterMode });
+      }
       if (p === '/api/command' && method === 'POST') {
         const sid = body.studentId;
         if (!state.students.find(s => s.id === sid)) return json({ error: 'unknown student' }, 404);
@@ -202,6 +225,18 @@ export async function onRequest(context) {
       }
       if (p === '/api/alerts/seen' && method === 'POST') {
         state.alerts.forEach(a => { a.seen = true; }); await saveState(env, state); return json({ ok: true });
+      }
+      // Teacher heartbeat: tells agents to start sending screen snapshots.
+      if (p === '/api/watch' && method === 'POST') {
+        await env.SAFETYWISE_KV.put('watch', String(Date.now() + 20000), { expirationTtl: 30 });
+        return json({ ok: true });
+      }
+      // Fetch the latest screen snapshots for the given students.
+      if (p === '/api/shots' && method === 'POST') {
+        const ids = Array.isArray(body.ids) ? body.ids.slice(0, 60) : [];
+        const shots = {};
+        await Promise.all(ids.map(async id => { const v = await env.SAFETYWISE_KV.get('shot:' + id, 'json'); if (v) shots[id] = v; }));
+        return json({ shots });
       }
       return json({ error: 'no such endpoint' }, 404);
     } catch (e) {

@@ -58,8 +58,33 @@ async function report() {
     if (!r.ok) return;
     const cmd = await r.json();
     await applyCommands(cmd, info.tabId, info.url);
+    if (cmd.capture) startCaptureLoop(); else stopCaptureLoop();
   } catch (e) { /* offline; try again next tick */ }
 }
+
+// --- Live screen capture (only while a teacher is watching) ---
+let captureLoop = null;
+async function captureAndUpload() {
+  const c = await getConfig();
+  if (!studentId) return false;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab || !/^https?:/.test(tab.url || '')) return true; // can't capture chrome:// pages; keep trying
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 40 });
+    const r = await fetch(c.serverUrl + '/api/agent/screenshot', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ studentId, img: dataUrl })
+    });
+    const d = await r.json();
+    return !!d.keep;
+  } catch (e) { return true; }
+}
+function startCaptureLoop() {
+  if (captureLoop) return;
+  const tick = async () => { const keep = await captureAndUpload(); captureLoop = keep ? setTimeout(tick, 2000) : null; };
+  captureLoop = setTimeout(tick, 0);
+}
+function stopCaptureLoop() { if (captureLoop) { clearTimeout(captureLoop); captureLoop = null; } }
 
 async function applyCommands(cmd, tabId, url) {
   // Block current page
@@ -87,6 +112,13 @@ chrome.tabs.onUpdated.addListener((id, info) => { if (info.status === 'complete'
 // allow popup/content to query state
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'sw-get-config') { getConfig().then(sendResponse); return true; }
-  if (msg.type === 'sw-save-config') { chrome.storage.local.set(msg.config).then(() => { studentId = null; chrome.storage.local.remove('studentId').then(() => enroll().then(() => sendResponse({ ok: true }))); }); return true; }
+  if (msg.type === 'sw-save-config') {
+    // Enrollment is permanent: once a device is enrolled it cannot be re-pointed or cleared from here.
+    chrome.storage.local.get('studentId').then(({ studentId: existing }) => {
+      if (existing) { sendResponse({ ok: false, locked: true }); return; }
+      chrome.storage.local.set(msg.config).then(() => enroll().then(id => sendResponse({ ok: !!id, locked: false })));
+    });
+    return true;
+  }
   if (msg.type === 'sw-report-now') { report().then(() => sendResponse({ ok: true })); return true; }
 });

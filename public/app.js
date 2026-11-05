@@ -43,8 +43,12 @@ document.getElementById('nav').addEventListener('click', e => {
 function className(id) { const c = (STATE.classes || []).find(c => c.id === id); return c ? c.name : '—'; }
 function online(s) { return s.lastSeen && (Date.now() - s.lastSeen < 90000); }
 
+let monTimers = [];
+function clearMonTimers() { monTimers.forEach(t => clearInterval(t)); monTimers = []; }
+
 function render() {
   if (!STATE) return;
+  clearMonTimers();
   const v = currentView;
   if (v === 'overview') return renderOverview();
   if (v === 'monitor') return renderMonitor();
@@ -87,27 +91,82 @@ function timeAgo(t) { const s = Math.floor((Date.now() - t) / 1000); if (s < 60)
 
 function renderMonitor() {
   const s = STATE;
-  main.innerHTML = head('Live classroom', '<span class="live"><span class="dot on"></span>auto-refresh 5s</span>') + `
-    <div class="grid cards" id="monGrid">
+  main.innerHTML = head('Live classroom', '<span class="live"><span class="dot on"></span>live screens</span>') + `
+    <div class="grid cards monitor" id="monGrid">
     ${s.students.map(st => {
       const a = s.activity[st.id]; const cmd = s.commands[st.id] || {};
-      return `<div class="card">
-        <div class="row" style="justify-content:space-between">
-          <strong>${esc(st.name)}</strong>
-          <span class="dot ${online(st) ? 'on' : 'off'}"></span>
+      return `<div class="card screencard">
+        <div class="screen" data-screen="${st.id}" title="Click to enlarge">
+          <img id="shot_${st.id}" alt="">
+          <div class="screen-ph" id="ph_${st.id}">${online(st) ? 'Waiting for screen…' : 'Offline'}</div>
+          <span class="screen-dot dot ${online(st) ? 'on' : 'off'}"></span>
         </div>
-        <div class="muted" style="font-size:12px;margin:2px 0 10px">${esc(className(st.classId))}${st.lastSeen ? ' · ' + timeAgo(st.lastSeen) : ''}</div>
-        <div class="student-tab" title="${a ? esc(a.url) : ''}">${a ? esc(a.title || a.url || '—') : '<span class="muted">No activity reported</span>'}</div>
-        ${a && a.tabs && a.tabs.length ? `<div class="muted" style="font-size:11px;margin-top:4px">${a.tabs.length} open tab(s)</div>` : ''}
-        <div class="row" style="margin-top:12px;gap:6px">
+        <div class="row" style="justify-content:space-between;margin-top:10px">
+          <strong>${esc(st.name)}</strong>
+          <span class="muted" style="font-size:11px" id="time_${st.id}">${st.lastSeen ? timeAgo(st.lastSeen) : '—'}</span>
+        </div>
+        <div class="student-tab" id="tab_${st.id}" title="${a ? esc(a.url) : ''}">${a ? esc(a.title || a.url || '—') : '<span class="muted">No activity reported</span>'}</div>
+        <div class="row" style="margin-top:10px;gap:6px">
           <button class="sm ${cmd.lock ? 'danger' : 'ghost'}" data-act="lock" data-id="${st.id}">${cmd.lock ? 'Unlock' : 'Lock'}</button>
           <button class="sm ghost" data-act="close" data-id="${st.id}">Close tab</button>
           <button class="sm ghost" data-act="msg" data-id="${st.id}">Message</button>
         </div>
       </div>`;
     }).join('') || '<p class="muted">No students enrolled yet. Add students or install the extension on a device.</p>'}
-    </div>`;
+    </div>
+    <div id="screenModal" class="modal hidden"><div class="modal-inner"><button class="modal-x" id="modalX">✕</button><img id="modalImg" alt=""><div class="modal-cap" id="modalCap"></div></div></div>`;
   main.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => monitorAction(b.dataset.act, b.dataset.id));
+
+  // click a screen to enlarge
+  const modal = document.getElementById('screenModal');
+  let modalId = null;
+  main.querySelectorAll('[data-screen]').forEach(el => el.onclick = () => {
+    modalId = el.dataset.screen; const st = s.students.find(x => x.id === modalId);
+    const img = document.getElementById('shot_' + modalId);
+    if (img && img.src) { document.getElementById('modalImg').src = img.src; }
+    document.getElementById('modalCap').textContent = st ? st.name : '';
+    modal.classList.remove('hidden');
+  });
+  document.getElementById('modalX').onclick = () => { modal.classList.add('hidden'); modalId = null; };
+  modal.onclick = e => { if (e.target === modal) { modal.classList.add('hidden'); modalId = null; } };
+
+  if (!s.students.length) return;
+  const ids = s.students.map(x => x.id);
+
+  async function heartbeat() { try { await api('/api/watch', 'POST'); } catch {} }
+  async function pollShots() {
+    try {
+      const d = await api('/api/shots', 'POST', { ids });
+      const now = Date.now();
+      for (const id of ids) {
+        const shot = d.shots[id];
+        const img = document.getElementById('shot_' + id);
+        const ph = document.getElementById('ph_' + id);
+        if (shot && img && now - shot.at < 30000) {
+          img.src = shot.img; img.style.display = 'block'; if (ph) ph.style.display = 'none';
+          if (modalId === id) document.getElementById('modalImg').src = shot.img;
+        }
+      }
+    } catch {}
+  }
+  async function softUpdate() {
+    try {
+      STATE = await api('/api/state');
+      for (const st of STATE.students) {
+        const a = STATE.activity[st.id];
+        const tab = document.getElementById('tab_' + st.id);
+        const time = document.getElementById('time_' + st.id);
+        const ph = document.getElementById('ph_' + st.id);
+        if (tab) tab.textContent = a ? (a.title || a.url || '—') : 'No activity reported';
+        if (time) time.textContent = st.lastSeen ? timeAgo(st.lastSeen) : '—';
+        if (ph && ph.style.display !== 'none') ph.textContent = online(st) ? 'Waiting for screen…' : 'Offline';
+      }
+    } catch {}
+  }
+  heartbeat(); pollShots();
+  monTimers.push(setInterval(heartbeat, 8000));
+  monTimers.push(setInterval(pollShots, 2000));
+  monTimers.push(setInterval(softUpdate, 6000));
 }
 
 async function monitorAction(act, id) {
@@ -184,26 +243,59 @@ function renderTeachers() {
 
 function renderFiltering() {
   const s = STATE;
+  const mode = s.filterMode || 'blacklist';
+  const blocks = s.filters.filter(f => f.type === 'block');
+  const allows = s.filters.filter(f => f.type === 'allow');
   main.innerHTML = head('Web filtering') + `
-    <div class="card section"><h3>Add rule</h3><div class="form-inline">
-      <div><label>Type</label><select id="fType"><option value="block">Block</option><option value="allow">Allow (override)</option></select></div>
-      <div><label>URL contains</label><input id="fPat" placeholder="e.g. game-site.com"></div>
-      <div><label>Category</label><input id="fCat" placeholder="optional"></div>
-      <div><label>Note</label><input id="fNote" placeholder="optional"></div>
-      <div><button id="addF">Add rule</button></div></div>
-      <p class="muted" style="font-size:12px;margin-top:10px">Allow rules win over block rules. Matching is by substring of the URL.</p></div>
-    <div class="card section"><table><thead><tr><th>Type</th><th>Pattern</th><th>Category</th><th>Note</th><th></th></tr></thead><tbody>
-    ${s.filters.map(f => `<tr><td><span class="tag ${f.type}">${f.type}</span></td><td>${esc(f.pattern)}</td><td class="muted">${esc(f.category || '—')}</td><td class="muted">${esc(f.note || '—')}</td>
-      <td><button class="sm danger" data-del="${f.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan=5 class="muted">No rules.</td></tr>'}
-    </tbody></table></div>
+    <div class="card section">
+      <h3>Filtering mode</h3>
+      <div class="modeswitch">
+        <button class="mode ${mode === 'blacklist' ? 'on' : ''}" data-mode="blacklist">
+          <strong>Blacklist</strong><span>Block the listed sites. Everything else is allowed.</span></button>
+        <button class="mode ${mode === 'whitelist' ? 'on' : ''}" data-mode="whitelist">
+          <strong>Whitelist</strong><span>Allow ONLY the listed sites. Everything else is blocked.</span></button>
+      </div>
+      <p class="muted" style="font-size:12px;margin-top:10px">${mode === 'whitelist'
+        ? 'Whitelist is active — students can reach only the allowed sites below.'
+        : 'Blacklist is active — students can reach any site except the blocked ones below.'}</p>
+    </div>
+
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px" class="section">
+      <div class="card">
+        <h3>⛔ Blacklist — blocked sites</h3>
+        <div class="row" style="gap:6px;margin:8px 0">
+          <input id="bPat" placeholder="e.g. game-site.com" style="flex:1">
+          <button id="addBlock">Add</button>
+        </div>
+        <table><tbody>
+        ${blocks.map(f => `<tr><td>${esc(f.pattern)}${f.note ? `<span class="muted" style="font-size:11px"> · ${esc(f.note)}</span>` : ''}</td><td style="text-align:right"><button class="sm danger" data-del="${f.id}">✕</button></td></tr>`).join('') || '<tr><td class="muted">No blocked sites.</td></tr>'}
+        </tbody></table>
+      </div>
+      <div class="card">
+        <h3>✅ Whitelist — allowed sites</h3>
+        <div class="row" style="gap:6px;margin:8px 0">
+          <input id="aPat" placeholder="e.g. wikipedia.org" style="flex:1">
+          <button id="addAllow" class="ok">Add</button>
+        </div>
+        <table><tbody>
+        ${allows.map(f => `<tr><td>${esc(f.pattern)}${f.note ? `<span class="muted" style="font-size:11px"> · ${esc(f.note)}</span>` : ''}</td><td style="text-align:right"><button class="sm danger" data-del="${f.id}">✕</button></td></tr>`).join('') || '<tr><td class="muted">No allowed sites.</td></tr>'}
+        </tbody></table>
+      </div>
+    </div>
+
     <div class="card section"><h3>Category filters</h3>
-      ${Object.keys(s.categories).map(k => `<label class="row" style="margin:6px 0"><input type="checkbox" style="width:auto" data-cat="${esc(k)}" ${s.categories[k] ? 'checked' : ''}> <span>${esc(k)}</span></label>`).join('')}
+      <div class="catgrid">
+      ${Object.keys(s.categories).map(k => `<label class="catchip"><input type="checkbox" data-cat="${esc(k)}" ${s.categories[k] ? 'checked' : ''}> <span>${esc(k)}</span></label>`).join('')}
+      </div>
     </div>
     <div class="card"><h3>Alert keywords</h3>
       <label>Comma-separated keywords that raise an alert when seen</label>
       <textarea id="kw" rows="2">${esc((s.alertKeywords || []).join(', '))}</textarea>
       <div class="row end" style="margin-top:10px"><button id="saveKw">Save keywords</button></div></div>`;
-  document.getElementById('addF').onclick = async () => { const pattern = fPat.value.trim(); if (!pattern) return toast('Pattern required'); await api('/api/filters', 'POST', { type: fType.value, pattern, category: fCat.value.trim(), note: fNote.value.trim() }); toast('Rule added'); await refresh(); };
+
+  main.querySelectorAll('button[data-mode]').forEach(b => b.onclick = async () => { await api('/api/filtermode', 'POST', { mode: b.dataset.mode }); toast('Mode: ' + b.dataset.mode); await refresh(); });
+  document.getElementById('addBlock').onclick = async () => { const pattern = bPat.value.trim(); if (!pattern) return toast('Enter a site'); await api('/api/filters', 'POST', { type: 'block', pattern }); toast('Blocked'); await refresh(); };
+  document.getElementById('addAllow').onclick = async () => { const pattern = aPat.value.trim(); if (!pattern) return toast('Enter a site'); await api('/api/filters', 'POST', { type: 'allow', pattern }); toast('Allowed'); await refresh(); };
   main.querySelectorAll('button[data-del]').forEach(b => b.onclick = async () => { await api('/api/filters/' + b.dataset.del, 'DELETE'); await refresh(); });
   main.querySelectorAll('input[data-cat]').forEach(c => c.onchange = async () => { await api('/api/categories', 'POST', { categories: { [c.dataset.cat]: c.checked } }); toast('Saved'); });
   document.getElementById('saveKw').onclick = async () => { await api('/api/keywords', 'POST', { keywords: kw.value.split(',') }); toast('Keywords saved'); await refresh(); };
@@ -242,4 +334,4 @@ function renderSetup() {
 
 // initial + polling
 refresh();
-setInterval(() => { if (['overview', 'monitor', 'alerts'].includes(currentView)) refresh().catch(() => {}); }, 5000);
+setInterval(() => { if (['overview', 'alerts'].includes(currentView)) refresh().catch(() => {}); }, 5000);

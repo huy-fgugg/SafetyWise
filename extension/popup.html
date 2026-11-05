@@ -11,25 +11,40 @@
   button{width:100%;margin-top:14px;padding:9px;border:none;border-radius:8px;background:#3b82f6;color:#fff;font-weight:600;cursor:pointer}
   .status{font-size:12px;margin-top:10px;color:#8b97ad}
   .ok{color:#34d399}
+  summary{font-size:12px;color:#8b97ad;cursor:pointer;margin-top:8px}
+  #locked{display:none;text-align:center;padding:12px 4px}
+  #locked .big{font-size:40px;margin-bottom:6px}
+  #locked h2{font-size:16px;margin:0 0 6px}
+  #locked p{font-size:12px;color:#8b97ad;line-height:1.5;margin:0}
 </style>
 </head>
 <body>
   <div class="brand"><span class="logo">S</span> SafetyWise</div>
-  <label>Console server URL</label>
-  <input id="serverUrl" placeholder="https://safetywise.pages.dev">
-  <label>Enrollment code <span style="color:#22d3ee">(from dashboard → Students)</span></label>
-  <input id="studentCode" placeholder="e.g. SW-AB12CD" style="text-transform:uppercase">
-  <details style="margin-top:8px">
-    <summary style="font-size:12px;color:#8b97ad;cursor:pointer">Advanced (optional)</summary>
-    <label>Shared enroll token</label>
-    <input id="enrollToken">
-    <label>Student email</label>
-    <input id="studentEmail">
-    <label>Student name</label>
-    <input id="studentName">
-  </details>
-  <button id="save">Save &amp; enroll</button>
-  <div class="status" id="status"></div>
+  <div id="setup">
+    <div id="form">
+      <label>Console server URL</label>
+      <input id="serverUrl" placeholder="https://safetywise.pages.dev">
+      <label>Enrollment code <span style="color:#22d3ee">(from dashboard → Students)</span></label>
+      <input id="studentCode" placeholder="e.g. SW-AB12CD" style="text-transform:uppercase">
+      <details>
+        <summary>Advanced (optional)</summary>
+        <label>Shared enroll token</label>
+        <input id="enrollToken">
+        <label>Student email</label>
+        <input id="studentEmail">
+        <label>Student name</label>
+        <input id="studentName">
+      </details>
+      <button id="save">Save &amp; enroll</button>
+      <div class="status" id="status"></div>
+    </div>
+    <p style="font-size:11px;color:#5f6b80;margin-top:12px">Enrollment is permanent — once this device is enrolled it stays linked to its student and cannot be changed here.</p>
+  </div>
+  <div id="locked">
+    <div class="big">🔒</div>
+    <h2>Enrolled &amp; managed</h2>
+    <p>This device is managed by your school with SafetyWise. Settings are locked and cannot be changed.</p>
+  </div>
 <script src="popup.js"></script>
 </body>
 </html>

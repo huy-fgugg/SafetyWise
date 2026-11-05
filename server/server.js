@@ -64,16 +64,13 @@ function logAlert(state, studentId, kind, detail) {
 // Decide if a URL should be blocked for a given student, returns reason or null
 function blockReason(state, url, title) {
   const u = (url || '').toLowerCase();
-  const t = (title || '').toLowerCase();
-  for (const f of state.filters) {
-    if (!f.pattern) continue;
-    const hit = u.includes(f.pattern.toLowerCase());
-    if (f.type === 'allow' && hit) return null;
+  const allowHit = state.filters.some(f => f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase()));
+  if (allowHit) return null;
+  if ((state.filterMode || 'blacklist') === 'whitelist') {
+    return { pattern: '', note: 'Only school-approved sites are allowed', category: 'Whitelist' };
   }
-  for (const f of state.filters) {
-    if (f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()))
-      return { pattern: f.pattern, note: f.note || 'Blocked by policy', category: f.category || '' };
-  }
+  const blk = state.filters.find(f => f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()));
+  if (blk) return { pattern: blk.pattern, note: blk.note || 'Blocked by policy', category: blk.category || '' };
   return null;
 }
 
@@ -138,13 +135,22 @@ const server = http.createServer(async (req, res) => {
     const reason = blockReason(state, b.url, b.title);
     if (reason) logAlert(state, sid, 'block', { url: b.url, reason });
     const cmd = state.commands[sid] || {};
+    const capture = !!(state.watchUntil && Date.now() < state.watchUntil);
     // consume one-shot commands
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab };
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture };
     if (cmd.closeTab) { cmd.closeTab = false; }
     if (cmd.message) { cmd.message = ''; }
     state.commands[sid] = cmd;
     db.save();
     return send(res, 200, out);
+  }
+
+  if (p === '/api/agent/screenshot' && method === 'POST') {
+    const b = await readBody(req);
+    if (!b.studentId || !b.img) return send(res, 400, { error: 'bad snapshot' });
+    state.shots = state.shots || {};
+    state.shots[b.studentId] = { img: b.img, at: Date.now() };
+    return send(res, 200, { ok: true, keep: !!(state.watchUntil && Date.now() < state.watchUntil) });
   }
 
   // ---------- Authenticated dashboard API ----------
@@ -164,6 +170,7 @@ const server = http.createServer(async (req, res) => {
         filters: state.filters,
         categories: state.categories,
         alertKeywords: state.alertKeywords,
+        filterMode: state.filterMode || 'blacklist',
         activity: state.activity,
         commands: state.commands,
         alerts: state.alerts.slice(0, 100),
@@ -244,6 +251,12 @@ const server = http.createServer(async (req, res) => {
       db.save();
       return send(res, 200, { ok: true });
     }
+    if (p === '/api/filtermode' && method === 'POST') {
+      if (!isAdmin) return send(res, 403, { error: 'admin only' });
+      state.filterMode = b.mode === 'whitelist' ? 'whitelist' : 'blacklist';
+      db.save();
+      return send(res, 200, { ok: true, filterMode: state.filterMode });
+    }
 
     // ----- Teacher controls: send command to a student -----
     if (p === '/api/command' && method === 'POST') {
@@ -271,6 +284,18 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/alerts/seen' && method === 'POST') {
       state.alerts.forEach(a => { a.seen = true; }); db.save();
       return send(res, 200, { ok: true });
+    }
+
+    if (p === '/api/watch' && method === 'POST') {
+      state.watchUntil = Date.now() + 20000;
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/api/shots' && method === 'POST') {
+      const ids = Array.isArray(b.ids) ? b.ids.slice(0, 60) : [];
+      const shots = {};
+      state.shots = state.shots || {};
+      for (const id of ids) if (state.shots[id]) shots[id] = state.shots[id];
+      return send(res, 200, { shots });
     }
 
     return send(res, 404, { error: 'no such endpoint' });
