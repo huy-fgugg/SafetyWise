@@ -45,7 +45,7 @@ async function deviceId() {
 async function activeTabInfo() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const all = await chrome.tabs.query({});
-  return { url: tab?.url || '', title: tab?.title || '', tabId: tab?.id, tabs: all.map(t => ({ title: t.title, url: t.url })) };
+  return { url: tab?.url || '', title: tab?.title || '', tabId: tab?.id, tabs: all.map(t => ({ id: t.id, title: t.title, url: t.url, active: t.active })) };
 }
 
 async function report() {
@@ -60,37 +60,11 @@ async function report() {
     if (!r.ok) return;
     const cmd = await r.json();
     await applyCommands(cmd, info.tabId, info.url);
-    if (cmd.capture) startCaptureLoop(); else stopCaptureLoop();
   } catch (e) { /* offline; try again next tick */ }
 }
 
-// --- Live screen capture (only while a teacher is watching) ---
-let captureLoop = null;
-async function captureAndUpload() {
-  const c = await getConfig();
-  if (!studentId) return false;
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab || !/^https?:/.test(tab.url || '')) return true; // can't capture chrome:// pages; keep trying
-    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 40 });
-    const r = await fetch(c.serverUrl + '/api/agent/screenshot', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ studentId, img: dataUrl })
-    });
-    const d = await r.json();
-    return !!d.keep;
-  } catch (e) { return true; }
-}
-function startCaptureLoop() {
-  if (captureLoop) return;
-  const tick = async () => { const keep = await captureAndUpload(); captureLoop = keep ? setTimeout(tick, 2000) : null; };
-  captureLoop = setTimeout(tick, 0);
-}
-function stopCaptureLoop() { if (captureLoop) { clearTimeout(captureLoop); captureLoop = null; } }
-
 // Release this device: clear stored enrollment so the popup returns to setup.
 async function doUnlink() {
-  stopCaptureLoop();
   studentId = null;
   try { await chrome.storage.local.clear(); } catch (e) {}
   // notify student overlay to clear
@@ -106,6 +80,15 @@ async function applyCommands(cmd, tabId, url) {
     const dest = chrome.runtime.getURL('blocked.html') + '?u=' + encodeURIComponent(url) + '&r=' + encodeURIComponent(cmd.block.note || 'Blocked');
     try { await chrome.tabs.update(tabId, { url: dest }); } catch {}
     return;
+  }
+  // Focus a specific tab on the student's device (teacher clicked "Open" in the tab list)
+  if (cmd.focusTab) {
+    try {
+      let target = null;
+      if (cmd.focusTab.id != null) { try { target = await chrome.tabs.get(cmd.focusTab.id); } catch {} }
+      if (!target && cmd.focusTab.url) { const all = await chrome.tabs.query({}); target = all.find(t => t.url === cmd.focusTab.url); }
+      if (target && target.id != null) { await chrome.tabs.update(target.id, { active: true }); if (target.windowId != null) await chrome.windows.update(target.windowId, { focused: true }); }
+    } catch {}
   }
   // Close tab command (one-shot)
   if (cmd.closeTab && tabId != null) { try { await chrome.tabs.remove(tabId); } catch {} }

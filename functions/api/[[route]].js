@@ -14,6 +14,8 @@ function defaults() {
     categories: { 'Gaming': false, 'Social Media': false, 'Streaming Video': false, 'Adult Content': true, 'Security Threats': true },
     alertKeywords: ['violence', 'self-harm', 'weapon'],
     filterMode: 'blacklist', // 'blacklist' = block listed sites; 'whitelist' = allow ONLY listed sites
+    scenes: [],              // teacher-created named block/allow sets
+    activeScene: null,       // id of the scene currently applied to all students
     activity: {},
     commands: {},
     alerts: [],
@@ -43,17 +45,20 @@ async function getSession(env, req) {
   return await env.SAFETYWISE_KV.get('sess:' + t, 'json');
 }
 
+// The rules currently in force: an active scene overrides the base filters.
+function effectiveRules(state) {
+  if (state.activeScene) {
+    const sc = (state.scenes || []).find(s => s.id === state.activeScene);
+    if (sc) return { mode: sc.mode || 'blacklist', filters: [...(sc.block || []).map(p => ({ type: 'block', pattern: p })), ...(sc.allow || []).map(p => ({ type: 'allow', pattern: p }))] };
+  }
+  return { mode: state.filterMode || 'blacklist', filters: state.filters || [] };
+}
 function blockReason(state, url) {
   const u = (url || '').toLowerCase();
-  // Allow (whitelist) rules always win.
-  const allowHit = state.filters.some(f => f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase()));
-  if (allowHit) return null;
-  if ((state.filterMode || 'blacklist') === 'whitelist') {
-    // Whitelist mode: everything not explicitly allowed is blocked.
-    return { pattern: '', note: 'Only school-approved sites are allowed', category: 'Whitelist' };
-  }
-  // Blacklist mode: block only listed sites.
-  const blk = state.filters.find(f => f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()));
+  const { mode, filters } = effectiveRules(state);
+  if (filters.some(f => f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase()))) return null;
+  if (mode === 'whitelist') return { pattern: '', note: 'Only school-approved sites are allowed', category: 'Whitelist' };
+  const blk = filters.find(f => f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()));
   if (blk) return { pattern: blk.pattern, note: blk.note || 'Blocked by policy', category: blk.category || '' };
   return null;
 }
@@ -120,23 +125,14 @@ export async function onRequest(context) {
     const reason = blockReason(state, body.url);
     if (reason) logAlert(state, sid, 'block', { url: body.url, reason });
     const cmd = state.commands[sid] || {};
-    const watch = await env.SAFETYWISE_KV.get('watch');
-    const capture = !!(watch && Date.now() < Number(watch));
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture, unlink: !!cmd.unlink };
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, unlink: !!cmd.unlink, focusTab: cmd.focusTab || null };
     if (cmd.closeTab) cmd.closeTab = false;
     if (cmd.message) cmd.message = '';
+    if (cmd.focusTab) cmd.focusTab = null;
     if (cmd.unlink) { cmd.unlink = false; student.deviceId = null; } // release the device
     state.commands[sid] = cmd;
     await saveState(env, state);
     return json(out);
-  }
-
-  // Receive a screen snapshot from an agent (stored briefly, separate from state).
-  if (p === '/api/agent/screenshot' && method === 'POST') {
-    if (!body.studentId || !body.img) return json({ error: 'bad snapshot' }, 400);
-    await env.SAFETYWISE_KV.put('shot:' + body.studentId, JSON.stringify({ img: body.img, at: Date.now() }), { expirationTtl: 60 });
-    const watch = await env.SAFETYWISE_KV.get('watch');
-    return json({ ok: true, keep: !!(watch && Date.now() < Number(watch)) });
   }
 
   // ---- Authenticated dashboard API ----
@@ -153,6 +149,7 @@ export async function onRequest(context) {
           teachers: state.teachers.map(t => ({ id: t.id, username: t.username, name: t.name, classIds: t.classIds || [] })),
           students: state.students, classes: state.classes, filters: state.filters,
           categories: state.categories, alertKeywords: state.alertKeywords, filterMode: state.filterMode || 'blacklist',
+          scenes: state.scenes || [], activeScene: state.activeScene || null,
           activity: state.activity, commands: state.commands, alerts: state.alerts.slice(0, 100),
           enrollToken: isAdmin ? state.enrollToken : undefined
         });
@@ -212,6 +209,31 @@ export async function onRequest(context) {
         state.filterMode = body.mode === 'whitelist' ? 'whitelist' : 'blacklist';
         await saveState(env, state); return json({ ok: true, filterMode: state.filterMode });
       }
+
+      // ----- Scenes (teachers allowed) -----
+      if (p === '/api/scenes' && method === 'POST') {
+        const sc = {
+          id: uid('scene'), name: body.name || 'Untitled scene',
+          mode: body.mode === 'whitelist' ? 'whitelist' : 'blacklist',
+          block: (body.block || []).map(x => String(x).trim()).filter(Boolean),
+          allow: (body.allow || []).map(x => String(x).trim()).filter(Boolean),
+          owner: user.username, createdAt: Date.now()
+        };
+        state.scenes = state.scenes || []; state.scenes.push(sc);
+        await saveState(env, state); return json({ id: sc.id });
+      }
+      if (p.match(/^\/api\/scenes\/[^/]+$/) && method === 'DELETE') {
+        const id = p.split('/').pop();
+        state.scenes = (state.scenes || []).filter(s => s.id !== id);
+        if (state.activeScene === id) state.activeScene = null;
+        await saveState(env, state); return json({ ok: true });
+      }
+      if (p === '/api/scenes/activate' && method === 'POST') {
+        const id = body.id || null;
+        if (id && !(state.scenes || []).find(s => s.id === id)) return json({ error: 'no such scene' }, 404);
+        state.activeScene = id; // null deactivates
+        await saveState(env, state); return json({ ok: true, activeScene: state.activeScene });
+      }
       if (p === '/api/command' && method === 'POST') {
         const sid = body.studentId;
         if (!state.students.find(s => s.id === sid)) return json({ error: 'unknown student' }, 404);
@@ -220,6 +242,7 @@ export async function onRequest(context) {
         if ('message' in body) cmd.message = String(body.message || '');
         if ('closeTab' in body) cmd.closeTab = !!body.closeTab;
         if ('unlink' in body) cmd.unlink = !!body.unlink;
+        if ('focusTab' in body) cmd.focusTab = body.focusTab || null;
         state.commands[sid] = cmd; await saveState(env, state); return json({ ok: true, command: cmd });
       }
       if (p === '/api/admins' && method === 'POST') {
@@ -231,18 +254,6 @@ export async function onRequest(context) {
       }
       if (p === '/api/alerts/seen' && method === 'POST') {
         state.alerts.forEach(a => { a.seen = true; }); await saveState(env, state); return json({ ok: true });
-      }
-      // Teacher heartbeat: tells agents to start sending screen snapshots.
-      if (p === '/api/watch' && method === 'POST') {
-        await env.SAFETYWISE_KV.put('watch', String(Date.now() + 20000), { expirationTtl: 30 });
-        return json({ ok: true });
-      }
-      // Fetch the latest screen snapshots for the given students.
-      if (p === '/api/shots' && method === 'POST') {
-        const ids = Array.isArray(body.ids) ? body.ids.slice(0, 60) : [];
-        const shots = {};
-        await Promise.all(ids.map(async id => { const v = await env.SAFETYWISE_KV.get('shot:' + id, 'json'); if (v) shots[id] = v; }));
-        return json({ shots });
       }
       return json({ error: 'no such endpoint' }, 404);
     } catch (e) {

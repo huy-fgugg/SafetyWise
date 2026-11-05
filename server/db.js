@@ -27,6 +27,8 @@ function defaults() {
     alertKeywords: ['violence', 'self-harm', 'weapon'],
     // 'blacklist' = block listed sites; 'whitelist' = allow ONLY listed sites
     filterMode: 'blacklist',
+    scenes: [],
+    activeScene: null,
     // live activity reports from agents, keyed by studentId
     activity: {},
     // pending commands per studentId: { lock:bool, message:string, closeTab:bool }

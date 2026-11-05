@@ -52,6 +52,7 @@ function render() {
   const v = currentView;
   if (v === 'overview') return renderOverview();
   if (v === 'monitor') return renderMonitor();
+  if (v === 'scenes') return renderScenes();
   if (v === 'students') return renderStudents();
   if (v === 'classes') return renderClasses();
   if (v === 'teachers') return renderTeachers();
@@ -89,84 +90,118 @@ function renderOverview() {
 
 function timeAgo(t) { const s = Math.floor((Date.now() - t) / 1000); if (s < 60) return s + 's ago'; if (s < 3600) return Math.floor(s / 60) + 'm ago'; return Math.floor(s / 3600) + 'h ago'; }
 
+function hostOf(url) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } }
+function favicon(url) { const h = hostOf(url); return h ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(h)}&sz=32` : ''; }
+
 function renderMonitor() {
   const s = STATE;
-  main.innerHTML = head('Live classroom', '<span class="live"><span class="dot on"></span>live screens</span>') + `
-    <div class="grid cards monitor" id="monGrid">
-    ${s.students.map(st => {
-      const a = s.activity[st.id]; const cmd = s.commands[st.id] || {};
-      return `<div class="card screencard">
-        <div class="screen" data-screen="${st.id}" title="Click to enlarge">
-          <img id="shot_${st.id}" alt="">
-          <div class="screen-ph" id="ph_${st.id}">${online(st) ? 'Waiting for screen…' : 'Offline'}</div>
-          <span class="screen-dot dot ${online(st) ? 'on' : 'off'}"></span>
-        </div>
-        <div class="row" style="justify-content:space-between;margin-top:10px">
-          <strong>${esc(st.name)}</strong>
-          <span class="muted" style="font-size:11px" id="time_${st.id}">${st.lastSeen ? timeAgo(st.lastSeen) : '—'}</span>
-        </div>
-        <div class="student-tab" id="tab_${st.id}" title="${a ? esc(a.url) : ''}">${a ? esc(a.title || a.url || '—') : '<span class="muted">No activity reported</span>'}</div>
-        <div class="row" style="margin-top:10px;gap:6px">
-          <button class="sm ${cmd.lock ? 'danger' : 'ghost'}" data-act="lock" data-id="${st.id}">${cmd.lock ? 'Unlock' : 'Lock'}</button>
-          <button class="sm ghost" data-act="close" data-id="${st.id}">Close tab</button>
-          <button class="sm ghost" data-act="msg" data-id="${st.id}">Message</button>
-        </div>
-      </div>`;
-    }).join('') || '<p class="muted">No students enrolled yet. Add students or install the extension on a device.</p>'}
+  const active = s.activeScene ? (s.scenes || []).find(x => x.id === s.activeScene) : null;
+  main.innerHTML = head('Classroom', '<span class="live"><span class="dot on"></span>live</span>') + `
+    <div class="scenebar ${active ? 'on' : ''}" id="sceneBar">
+      ${active ? `<span>🎬 Scene active: <strong>${esc(active.name)}</strong> (${active.mode})</span><button class="sm" id="sceneOff">Stop scene</button>`
+        : `<span class="muted">No scene running — base web-filter rules apply.</span><button class="sm ghost" data-goto="scenes">Manage scenes</button>`}
     </div>
-    <div id="screenModal" class="modal hidden"><div class="modal-inner"><button class="modal-x" id="modalX">✕</button><img id="modalImg" alt=""><div class="modal-cap" id="modalCap"></div></div></div>`;
+    <div class="classgrid" id="monGrid">
+    ${s.students.map(st => renderStudentCard(st)).join('') || '<p class="muted">No students enrolled yet. Add students, then enroll a device with its code.</p>'}
+    </div>`;
+  bindMonitor();
+  if (document.getElementById('sceneOff')) document.getElementById('sceneOff').onclick = async () => { await api('/api/scenes/activate', 'POST', { id: null }); toast('Scene stopped'); await refresh(); };
+  main.querySelectorAll('[data-goto]').forEach(b => b.onclick = () => { currentView = b.dataset.goto; document.querySelectorAll('#nav a').forEach(x => x.classList.toggle('active', x.dataset.view === currentView)); render(); });
+  monTimers.push(setInterval(softUpdateMonitor, 4000));
+}
+
+function renderStudentCard(st) {
+  const s = STATE;
+  const a = s.activity[st.id]; const cmd = s.commands[st.id] || {};
+  const tabs = (a && a.tabs) ? a.tabs.filter(t => /^https?:/.test(t.url || '')) : [];
+  const cur = a ? { title: a.title, url: a.url } : null;
+  return `<div class="card studentcard" id="card_${st.id}">
+    <div class="sc-head">
+      <div class="row" style="gap:8px">
+        <span class="dot ${online(st) ? 'on' : 'off'}"></span>
+        <strong>${esc(st.name)}</strong>
+      </div>
+      <span class="muted" style="font-size:11px" id="time_${st.id}">${st.lastSeen ? timeAgo(st.lastSeen) : '—'}</span>
+    </div>
+    <div class="curtab" id="cur_${st.id}">
+      ${cur && cur.url ? `<img class="fav" src="${favicon(cur.url)}" onerror="this.style.visibility='hidden'">
+        <div class="curtab-txt"><div class="curtab-title">${esc(cur.title || cur.url)}</div><div class="curtab-host">${esc(hostOf(cur.url) || cur.url)}</div></div>`
+        : '<span class="muted">No activity reported</span>'}
+    </div>
+    <div class="tabs-wrap">
+      <div class="tabs-head">Open tabs <span class="muted">(${tabs.length})</span></div>
+      <div class="tablist" id="tabs_${st.id}">
+        ${tabs.map(t => tabRow(st.id, t)).join('') || '<div class="muted" style="font-size:12px;padding:6px">No open tabs reported.</div>'}
+      </div>
+    </div>
+    <div class="row sc-actions">
+      <button class="sm ${cmd.lock ? 'warn' : 'ghost'}" data-act="lock" data-id="${st.id}">${cmd.lock ? '🔓 Unlock' : '🔒 Lock'}</button>
+      <button class="sm ghost" data-act="msg" data-id="${st.id}">💬 Message</button>
+      <button class="sm ghost" data-act="close" data-id="${st.id}">✕ Close tab</button>
+    </div>
+  </div>`;
+}
+
+function tabRow(sid, t) {
+  const h = hostOf(t.url);
+  const blocked = isBlockedNow(t.url);
+  return `<div class="tabrow ${t.active ? 'active' : ''}">
+    <img class="fav" src="${favicon(t.url)}" onerror="this.style.visibility='hidden'">
+    <div class="tabrow-txt" title="${esc(t.url)}"><div class="tabrow-title">${esc(t.title || h || t.url)}</div><div class="tabrow-host">${esc(h)}</div></div>
+    <div class="tabrow-actions">
+      <button class="icon" title="Open on student screen" data-open="${sid}" data-tabid="${t.id != null ? t.id : ''}" data-url="${esc(t.url)}">↗</button>
+      ${blocked
+        ? `<button class="icon allow" title="Unblock ${esc(h)}" data-allow="${esc(h)}">✓</button>`
+        : `<button class="icon block" title="Block ${esc(h)}" data-block="${esc(h)}">⊘</button>`}
+    </div>
+  </div>`;
+}
+
+// Is this URL blocked by the rules currently in force (scene or base)?
+function isBlockedNow(url) {
+  const s = STATE; const u = (url || '').toLowerCase();
+  let mode = s.filterMode || 'blacklist'; let filters = s.filters || [];
+  if (s.activeScene) { const sc = (s.scenes || []).find(x => x.id === s.activeScene); if (sc) { mode = sc.mode || 'blacklist'; filters = [...(sc.block || []).map(p => ({ type: 'block', pattern: p })), ...(sc.allow || []).map(p => ({ type: 'allow', pattern: p }))]; } }
+  if (filters.some(f => f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase()))) return false;
+  if (mode === 'whitelist') return true;
+  return filters.some(f => f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()));
+}
+
+function bindMonitor() {
   main.querySelectorAll('button[data-act]').forEach(b => b.onclick = () => monitorAction(b.dataset.act, b.dataset.id));
-
-  // click a screen to enlarge
-  const modal = document.getElementById('screenModal');
-  let modalId = null;
-  main.querySelectorAll('[data-screen]').forEach(el => el.onclick = () => {
-    modalId = el.dataset.screen; const st = s.students.find(x => x.id === modalId);
-    const img = document.getElementById('shot_' + modalId);
-    if (img && img.src) { document.getElementById('modalImg').src = img.src; }
-    document.getElementById('modalCap').textContent = st ? st.name : '';
-    modal.classList.remove('hidden');
+  main.querySelectorAll('button[data-open]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.open, tabid = b.dataset.tabid, url = b.dataset.url;
+    await api('/api/command', 'POST', { studentId: id, focusTab: { id: tabid ? Number(tabid) : null, url } });
+    toast('Opening tab on student device');
   });
-  document.getElementById('modalX').onclick = () => { modal.classList.add('hidden'); modalId = null; };
-  modal.onclick = e => { if (e.target === modal) { modal.classList.add('hidden'); modalId = null; } };
+  main.querySelectorAll('button[data-block]').forEach(b => b.onclick = async () => { await api('/api/filters', 'POST', { type: 'block', pattern: b.dataset.block }); toast('Blocked ' + b.dataset.block); await refresh(); });
+  main.querySelectorAll('button[data-allow]').forEach(b => b.onclick = async () => {
+    // remove any block rule for this host, and add an allow rule
+    const host = b.dataset.allow;
+    const toDel = (STATE.filters || []).filter(f => f.type === 'block' && f.pattern && host.includes(f.pattern) || (f.pattern && f.pattern.includes(host)));
+    for (const f of toDel) { try { await api('/api/filters/' + f.id, 'DELETE'); } catch {} }
+    await api('/api/filters', 'POST', { type: 'allow', pattern: host });
+    toast('Unblocked ' + host); await refresh();
+  });
+}
 
-  if (!s.students.length) return;
-  const ids = s.students.map(x => x.id);
-
-  async function heartbeat() { try { await api('/api/watch', 'POST'); } catch {} }
-  async function pollShots() {
-    try {
-      const d = await api('/api/shots', 'POST', { ids });
-      const now = Date.now();
-      for (const id of ids) {
-        const shot = d.shots[id];
-        const img = document.getElementById('shot_' + id);
-        const ph = document.getElementById('ph_' + id);
-        if (shot && img && now - shot.at < 30000) {
-          img.src = shot.img; img.style.display = 'block'; if (ph) ph.style.display = 'none';
-          if (modalId === id) document.getElementById('modalImg').src = shot.img;
-        }
-      }
-    } catch {}
-  }
-  async function softUpdate() {
-    try {
-      STATE = await api('/api/state');
-      for (const st of STATE.students) {
-        const a = STATE.activity[st.id];
-        const tab = document.getElementById('tab_' + st.id);
-        const time = document.getElementById('time_' + st.id);
-        const ph = document.getElementById('ph_' + st.id);
-        if (tab) tab.textContent = a ? (a.title || a.url || '—') : 'No activity reported';
-        if (time) time.textContent = st.lastSeen ? timeAgo(st.lastSeen) : '—';
-        if (ph && ph.style.display !== 'none') ph.textContent = online(st) ? 'Waiting for screen…' : 'Offline';
-      }
-    } catch {}
-  }
-  heartbeat(); pollShots();
-  monTimers.push(setInterval(heartbeat, 8000));
-  monTimers.push(setInterval(pollShots, 2000));
-  monTimers.push(setInterval(softUpdate, 6000));
+async function softUpdateMonitor() {
+  try {
+    STATE = await api('/api/state');
+    for (const st of STATE.students) {
+      const card = document.getElementById('card_' + st.id);
+      if (!card) continue;
+      const cur = document.getElementById('cur_' + st.id);
+      const tabsEl = document.getElementById('tabs_' + st.id);
+      const time = document.getElementById('time_' + st.id);
+      const a = STATE.activity[st.id];
+      const tabs = (a && a.tabs) ? a.tabs.filter(t => /^https?:/.test(t.url || '')) : [];
+      if (time) time.textContent = st.lastSeen ? timeAgo(st.lastSeen) : '—';
+      if (cur) cur.innerHTML = (a && a.url) ? `<img class="fav" src="${favicon(a.url)}" onerror="this.style.visibility='hidden'"><div class="curtab-txt"><div class="curtab-title">${esc(a.title || a.url)}</div><div class="curtab-host">${esc(hostOf(a.url) || a.url)}</div></div>` : '<span class="muted">No activity reported</span>';
+      if (tabsEl) tabsEl.innerHTML = tabs.map(t => tabRow(st.id, t)).join('') || '<div class="muted" style="font-size:12px;padding:6px">No open tabs reported.</div>';
+    }
+    bindMonitor();
+  } catch {}
 }
 
 async function monitorAction(act, id) {
@@ -175,6 +210,46 @@ async function monitorAction(act, id) {
   if (act === 'close') await api('/api/command', 'POST', { studentId: id, closeTab: true });
   if (act === 'msg') { const m = prompt('Message to send to student:'); if (m == null) return; await api('/api/command', 'POST', { studentId: id, message: m }); }
   toast('Command sent'); await refresh();
+}
+
+function renderScenes() {
+  const s = STATE;
+  main.innerHTML = head('Scenes') + `
+    <div class="card section"><h3>Create a scene</h3>
+      <p class="muted" style="font-size:13px;margin-top:0">A scene is a saved set of blocked/allowed sites a teacher can turn on for the class in one click — e.g. "Quiz mode" that allows only the quiz site.</p>
+      <div class="form-inline">
+        <div><label>Scene name</label><input id="scName" placeholder="e.g. Reading time"></div>
+        <div><label>Mode</label><select id="scMode"><option value="blacklist">Blacklist (block listed)</option><option value="whitelist">Whitelist (allow only listed)</option></select></div>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+        <div><label>⛔ Blocked sites (one per line)</label><textarea id="scBlock" rows="4" placeholder="game-site.com&#10;youtube.com"></textarea></div>
+        <div><label>✅ Allowed sites (one per line)</label><textarea id="scAllow" rows="4" placeholder="wikipedia.org&#10;classroom.google.com"></textarea></div>
+      </div>
+      <div class="row end" style="margin-top:10px"><button id="scAdd">Create scene</button></div>
+    </div>
+    <div class="grid cards">
+    ${(s.scenes || []).map(sc => `<div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>🎬 ${esc(sc.name)}</strong>
+        ${s.activeScene === sc.id ? '<span class="tag allow">running</span>' : ''}
+      </div>
+      <div class="muted" style="font-size:12px;margin:6px 0">${sc.mode} · ${(sc.block || []).length} blocked · ${(sc.allow || []).length} allowed</div>
+      <div class="row" style="gap:6px;margin-top:8px">
+        ${s.activeScene === sc.id
+          ? `<button class="sm warn" data-stop="1">Stop</button>`
+          : `<button class="sm ok" data-run="${sc.id}">▶ Run for class</button>`}
+        <button class="sm danger" data-delscene="${sc.id}">Delete</button>
+      </div>
+    </div>`).join('') || '<p class="muted">No scenes yet. Create one above.</p>'}
+    </div>`;
+  document.getElementById('scAdd').onclick = async () => {
+    const name = scName.value.trim(); if (!name) return toast('Name required');
+    await api('/api/scenes', 'POST', { name, mode: scMode.value, block: scBlock.value.split('\n'), allow: scAllow.value.split('\n') });
+    toast('Scene created'); await refresh();
+  };
+  main.querySelectorAll('button[data-run]').forEach(b => b.onclick = async () => { await api('/api/scenes/activate', 'POST', { id: b.dataset.run }); toast('Scene running'); await refresh(); });
+  main.querySelectorAll('button[data-stop]').forEach(b => b.onclick = async () => { await api('/api/scenes/activate', 'POST', { id: null }); toast('Scene stopped'); await refresh(); });
+  main.querySelectorAll('button[data-delscene]').forEach(b => b.onclick = async () => { if (!confirm('Delete scene?')) return; await api('/api/scenes/' + b.dataset.delscene, 'DELETE'); await refresh(); });
 }
 
 function renderStudents() {

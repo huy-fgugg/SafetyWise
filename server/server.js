@@ -62,14 +62,19 @@ function logAlert(state, studentId, kind, detail) {
 }
 
 // Decide if a URL should be blocked for a given student, returns reason or null
-function blockReason(state, url, title) {
-  const u = (url || '').toLowerCase();
-  const allowHit = state.filters.some(f => f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase()));
-  if (allowHit) return null;
-  if ((state.filterMode || 'blacklist') === 'whitelist') {
-    return { pattern: '', note: 'Only school-approved sites are allowed', category: 'Whitelist' };
+function effectiveRules(state) {
+  if (state.activeScene) {
+    const sc = (state.scenes || []).find(s => s.id === state.activeScene);
+    if (sc) return { mode: sc.mode || 'blacklist', filters: [...(sc.block || []).map(p => ({ type: 'block', pattern: p })), ...(sc.allow || []).map(p => ({ type: 'allow', pattern: p }))] };
   }
-  const blk = state.filters.find(f => f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()));
+  return { mode: state.filterMode || 'blacklist', filters: state.filters || [] };
+}
+function blockReason(state, url) {
+  const u = (url || '').toLowerCase();
+  const { mode, filters } = effectiveRules(state);
+  if (filters.some(f => f.type === 'allow' && f.pattern && u.includes(f.pattern.toLowerCase()))) return null;
+  if (mode === 'whitelist') return { pattern: '', note: 'Only school-approved sites are allowed', category: 'Whitelist' };
+  const blk = filters.find(f => f.type === 'block' && f.pattern && u.includes(f.pattern.toLowerCase()));
   if (blk) return { pattern: blk.pattern, note: blk.note || 'Blocked by policy', category: blk.category || '' };
   return null;
 }
@@ -139,23 +144,15 @@ const server = http.createServer(async (req, res) => {
     const reason = blockReason(state, b.url, b.title);
     if (reason) logAlert(state, sid, 'block', { url: b.url, reason });
     const cmd = state.commands[sid] || {};
-    const capture = !!(state.watchUntil && Date.now() < state.watchUntil);
     // consume one-shot commands
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture, unlink: !!cmd.unlink };
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, unlink: !!cmd.unlink, focusTab: cmd.focusTab || null };
     if (cmd.closeTab) { cmd.closeTab = false; }
     if (cmd.message) { cmd.message = ''; }
+    if (cmd.focusTab) { cmd.focusTab = null; }
     if (cmd.unlink) { cmd.unlink = false; student.deviceId = null; }
     state.commands[sid] = cmd;
     db.save();
     return send(res, 200, out);
-  }
-
-  if (p === '/api/agent/screenshot' && method === 'POST') {
-    const b = await readBody(req);
-    if (!b.studentId || !b.img) return send(res, 400, { error: 'bad snapshot' });
-    state.shots = state.shots || {};
-    state.shots[b.studentId] = { img: b.img, at: Date.now() };
-    return send(res, 200, { ok: true, keep: !!(state.watchUntil && Date.now() < state.watchUntil) });
   }
 
   // ---------- Authenticated dashboard API ----------
@@ -176,6 +173,8 @@ const server = http.createServer(async (req, res) => {
         categories: state.categories,
         alertKeywords: state.alertKeywords,
         filterMode: state.filterMode || 'blacklist',
+        scenes: state.scenes || [],
+        activeScene: state.activeScene || null,
         activity: state.activity,
         commands: state.commands,
         alerts: state.alerts.slice(0, 100),
@@ -272,6 +271,7 @@ const server = http.createServer(async (req, res) => {
       if ('message' in b) cmd.message = String(b.message || '');
       if ('closeTab' in b) cmd.closeTab = !!b.closeTab;
       if ('unlink' in b) cmd.unlink = !!b.unlink;
+      if ('focusTab' in b) cmd.focusTab = b.focusTab || null;
       state.commands[sid] = cmd; db.save();
       return send(res, 200, { ok: true, command: cmd });
     }
@@ -292,16 +292,30 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true });
     }
 
-    if (p === '/api/watch' && method === 'POST') {
-      state.watchUntil = Date.now() + 20000;
+    // ----- Scenes (teachers allowed) -----
+    if (p === '/api/scenes' && method === 'POST') {
+      const sc = {
+        id: uid('scene'), name: b.name || 'Untitled scene',
+        mode: b.mode === 'whitelist' ? 'whitelist' : 'blacklist',
+        block: (b.block || []).map(x => String(x).trim()).filter(Boolean),
+        allow: (b.allow || []).map(x => String(x).trim()).filter(Boolean),
+        owner: user.username, createdAt: Date.now()
+      };
+      state.scenes = state.scenes || []; state.scenes.push(sc); db.save();
+      return send(res, 200, { id: sc.id });
+    }
+    if (p.match(/^\/api\/scenes\/[^/]+$/) && method === 'DELETE') {
+      const id = p.split('/').pop();
+      state.scenes = (state.scenes || []).filter(s => s.id !== id);
+      if (state.activeScene === id) state.activeScene = null;
+      db.save();
       return send(res, 200, { ok: true });
     }
-    if (p === '/api/shots' && method === 'POST') {
-      const ids = Array.isArray(b.ids) ? b.ids.slice(0, 60) : [];
-      const shots = {};
-      state.shots = state.shots || {};
-      for (const id of ids) if (state.shots[id]) shots[id] = state.shots[id];
-      return send(res, 200, { shots });
+    if (p === '/api/scenes/activate' && method === 'POST') {
+      const id = b.id || null;
+      if (id && !(state.scenes || []).find(s => s.id === id)) return send(res, 404, { error: 'no such scene' });
+      state.activeScene = id; db.save();
+      return send(res, 200, { ok: true, activeScene: state.activeScene });
     }
 
     return send(res, 404, { error: 'no such endpoint' });
