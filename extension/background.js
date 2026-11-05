@@ -108,7 +108,8 @@ async function applyCommands(cmd, tabId, url) {
 }
 
 function withProto(u) { return /^https?:\/\//.test(u) ? u : 'https://' + String(u).replace(/^\/+/, ''); }
-function urlMatchesAny(u, list) { u = (u || '').toLowerCase(); return list.some(a => a && u.includes(String(a).toLowerCase())); }
+function hostOf(u) { try { return new URL(withProto(u)).hostname.replace(/^www\./, '').toLowerCase(); } catch { return String(u || '').toLowerCase(); } }
+function tabUrl(t) { return (t.url || t.pendingUrl || '').toLowerCase(); } // pendingUrl covers still-loading tabs
 
 // Full-screen device lockdown: one lock page, everything else closed, window fullscreen.
 async function openLockPage() {
@@ -121,27 +122,49 @@ async function openLockPage() {
   try { await chrome.windows.update(lockTab.windowId, { focused: true, state: 'fullscreen' }); } catch {}
 }
 
-// Focus mode: open only the allowed tabs, close the rest, reopen allowed ones if closed.
+// Focus mode: keep exactly one tab per allowed site open, close everything else.
 async function applyFocus(list) {
+  const hosts = list.map(hostOf);
   let tabs = await chrome.tabs.query({});
-  for (const u of list) { if (!tabs.some(t => (t.url || '').toLowerCase().includes(String(u).toLowerCase()))) { try { await chrome.tabs.create({ url: withProto(u) }); } catch {} } }
+  // Open any allowed host that has no tab yet (pendingUrl counts, so loading tabs don't get duplicated).
+  for (let i = 0; i < list.length; i++) {
+    const h = hosts[i];
+    if (!tabs.some(t => tabUrl(t).includes(h))) { try { await chrome.tabs.create({ url: withProto(list[i]) }); } catch {} }
+  }
   tabs = await chrome.tabs.query({});
+  const kept = {};
   for (const t of tabs) {
-    if (!/^https?:/.test(t.url || '')) continue;
-    if (!urlMatchesAny(t.url, list)) { try { await chrome.tabs.remove(t.id); } catch {} }
+    const u = tabUrl(t);
+    if (!/^https?:/.test(u)) continue; // leave extension/new-tab/chrome pages alone
+    const h = hostOf(u);
+    if (hosts.includes(h)) {
+      if (kept[h]) { try { await chrome.tabs.remove(t.id); } catch {} } // extra copy of an allowed site -> close
+      else kept[h] = true;
+    } else {
+      try { await chrome.tabs.remove(t.id); } catch {} // not allowed -> close
+    }
   }
 }
 
+// Serialize enforcement so overlapping calls never create duplicate tabs.
+let enforcing = false, enforceAgain = false;
 async function applyEnforcement() {
+  if (enforcing) { enforceAgain = true; return; }
+  enforcing = true;
   try {
-    if (enforce.lock) { await openLockPage(); lockWasOn = true; return; }
-    if (lockWasOn) { lockWasOn = false; try { const wins = await chrome.windows.getAll(); for (const w of wins) await chrome.windows.update(w.id, { state: 'normal' }); } catch {} }
-    if (enforce.lockedTabs) await applyFocus(enforce.lockedTabs);
-  } catch (e) {}
+    do {
+      enforceAgain = false;
+      if (enforce.lock) { await openLockPage(); lockWasOn = true; }
+      else {
+        if (lockWasOn) { lockWasOn = false; try { const wins = await chrome.windows.getAll(); for (const w of wins) await chrome.windows.update(w.id, { state: 'normal' }); } catch {} }
+        if (enforce.lockedTabs) await applyFocus(enforce.lockedTabs);
+      }
+    } while (enforceAgain);
+  } catch (e) {} finally { enforcing = false; }
 }
 
 let enforceTimer = null;
-function scheduleEnforce() { if (!(enforce.lock || enforce.lockedTabs)) return; clearTimeout(enforceTimer); enforceTimer = setTimeout(() => applyEnforcement(), 200); }
+function scheduleEnforce() { if (!(enforce.lock || enforce.lockedTabs)) return; clearTimeout(enforceTimer); enforceTimer = setTimeout(() => applyEnforcement(), 250); }
 
 chrome.runtime.onInstalled.addListener(() => { enroll(); chrome.alarms.create('report', { periodInMinutes: 0.1 }); });
 chrome.runtime.onStartup.addListener(() => { enroll(); chrome.alarms.create('report', { periodInMinutes: 0.1 }); });
