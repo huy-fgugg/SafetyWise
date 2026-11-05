@@ -1,0 +1,28 @@
+{
+  "name": "safetywise-desktop",
+  "version": "1.0.0",
+  "description": "SafetyWise console as a desktop app",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "author": "SafetyWise",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "33.2.0",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.safetywise.console",
+    "productName": "SafetyWise",
+    "files": ["main.js", "preload.js", "loading.html", "build/**"],
+    "directories": { "output": "dist" },
+    "win": { "target": "nsis", "icon": "build/icon.png" },
+    "mac": { "target": "dmg", "icon": "build/icon.png", "category": "public.app-category.education" },
+    "linux": { "target": "AppImage", "icon": "build/icon.png", "category": "Education" }
+  }
+}

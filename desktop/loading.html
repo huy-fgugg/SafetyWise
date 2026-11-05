@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SafetyWise</title>
+<style>
+  html,body{height:100%;margin:0}
+  body{display:grid;place-items:center;background:#eef1f7;color:#1f2a3d;font-family:system-ui,sans-serif}
+  .logo{width:64px;height:64px;border-radius:16px;background:linear-gradient(135deg,#2563eb,#0ea5e9);display:grid;place-items:center;color:#fff;font-weight:900;font-size:32px;margin:0 auto 16px}
+  h1{font-size:20px;margin:0 0 6px;text-align:center}
+  p{color:#6b7688;text-align:center;margin:4px 0}
+  .spin{margin:18px auto 0;width:26px;height:26px;border:3px solid #cdd7ea;border-top-color:#2563eb;border-radius:50%;animation:s 1s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+  button{margin-top:18px;padding:10px 16px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}
+  .off{display:none}
+</style>
+</head>
+<body>
+  <div>
+    <div class="logo">S</div>
+    <h1>SafetyWise</h1>
+    <div id="loading">
+      <p>Connecting to your console…</p>
+      <div class="spin"></div>
+    </div>
+    <div id="offline" class="off">
+      <p>Couldn't reach the console.</p>
+      <p>Check your internet connection and try again.</p>
+      <div style="text-align:center"><button onclick="location.reload()">Retry</button></div>
+    </div>
+  </div>
+<script>
+  if (new URLSearchParams(location.search).get('offline')) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('offline').classList.remove('off');
+  }
+</script>
+</body>
+</html>
