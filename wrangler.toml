@@ -2,7 +2,7 @@ name = "safetywise"
 compatibility_date = "2024-11-01"
 pages_build_output_dir = "public"
 
-# KV is bound in the Cloudflare Pages dashboard (Settings -> Bindings -> KV),
-# with Variable name SAFETYWISE_KV pointing at a namespace you create.
-# (If you deploy with the wrangler CLI instead of Git, add a [[kv_namespaces]]
-#  block here with binding = "SAFETYWISE_KV" and the namespace id.)
+# KV namespace that stores all console state (users, classes, filters, activity).
+[[kv_namespaces]]
+binding = "SAFETYWISE_KV"
+id = "17bad5cd5ffe416aa7ce963ab87b979f"
