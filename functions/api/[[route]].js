@@ -35,6 +35,20 @@ async function loadState(env) {
 }
 async function saveState(env, s) { await env.SAFETYWISE_KV.put(STATE_KEY, JSON.stringify(s)); }
 
+// Per-student volatile data lives in its own keys so frequent agent reports
+// never rewrite (and clobber) the shared config document.
+async function getAct(env, sid) { return await env.SAFETYWISE_KV.get('act:' + sid, 'json'); }
+async function putAct(env, sid, v) { await env.SAFETYWISE_KV.put('act:' + sid, JSON.stringify(v), { expirationTtl: 1800 }); }
+async function getCmd(env, sid) { return (await env.SAFETYWISE_KV.get('cmd:' + sid, 'json')) || {}; }
+async function putCmd(env, sid, v) { await env.SAFETYWISE_KV.put('cmd:' + sid, JSON.stringify(v)); }
+async function delStudentKeys(env, sid) { await env.SAFETYWISE_KV.delete('act:' + sid); await env.SAFETYWISE_KV.delete('cmd:' + sid); }
+async function appendAlert(env, alert) { await env.SAFETYWISE_KV.put('alert:' + alert.at + ':' + Math.random().toString(36).slice(2, 6), JSON.stringify(alert), { expirationTtl: 86400 }); }
+async function getAlerts(env) {
+  const list = await env.SAFETYWISE_KV.list({ prefix: 'alert:', limit: 100 });
+  const vals = await Promise.all(list.keys.map(k => env.SAFETYWISE_KV.get(k.name, 'json')));
+  return vals.filter(Boolean).sort((a, b) => b.at - a.at);
+}
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -62,11 +76,6 @@ function blockReason(state, url) {
   if (blk) return { pattern: blk.pattern, note: blk.note || 'Blocked by policy', category: blk.category || '' };
   return null;
 }
-function logAlert(state, studentId, kind, detail) {
-  state.alerts.unshift({ id: uid('a'), studentId, kind, detail, at: Date.now(), seen: false });
-  state.alerts = state.alerts.slice(0, 500);
-}
-
 export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -118,20 +127,21 @@ export async function onRequest(context) {
     const sid = body.studentId;
     const student = state.students.find(s => s.id === sid);
     if (!student) return json({ error: 'unknown student' }, 404);
-    student.lastSeen = Date.now();
-    state.activity[sid] = { url: body.url || '', title: body.title || '', tabs: body.tabs || [], at: Date.now() };
+    const now = Date.now();
+    // activity -> its own key (no shared-doc write)
+    await putAct(env, sid, { url: body.url || '', title: body.title || '', tabs: body.tabs || [], at: now });
     const hay = ((body.title || '') + ' ' + (body.url || '')).toLowerCase();
-    for (const kw of state.alertKeywords) if (kw && hay.includes(kw.toLowerCase())) { logAlert(state, sid, 'keyword', { keyword: kw, url: body.url, title: body.title }); break; }
+    for (const kw of state.alertKeywords) if (kw && hay.includes(kw.toLowerCase())) { await appendAlert(env, { id: uid('a'), studentId: sid, kind: 'keyword', detail: { keyword: kw, url: body.url, title: body.title }, at: now, seen: false }); break; }
     const reason = blockReason(state, body.url);
-    if (reason) logAlert(state, sid, 'block', { url: body.url, reason });
-    const cmd = state.commands[sid] || {};
+    // commands -> their own key
+    const cmd = await getCmd(env, sid);
     const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, unlink: !!cmd.unlink, focusTab: cmd.focusTab || null, lockedTabs: cmd.lockedTabs || null };
-    if (cmd.closeTab) cmd.closeTab = false;
-    if (cmd.message) cmd.message = '';
-    if (cmd.focusTab) cmd.focusTab = null;
-    if (cmd.unlink) { cmd.unlink = false; student.deviceId = null; } // release the device
-    state.commands[sid] = cmd;
-    await saveState(env, state);
+    let changed = false;
+    if (cmd.closeTab) { cmd.closeTab = false; changed = true; }
+    if (cmd.message) { cmd.message = ''; changed = true; }
+    if (cmd.focusTab) { cmd.focusTab = null; changed = true; }
+    if (cmd.unlink) { cmd.unlink = false; changed = true; student.deviceId = null; await saveState(env, state); } // release device (rare)
+    if (changed) await putCmd(env, sid, cmd);
     return json(out);
   }
 
@@ -143,6 +153,14 @@ export async function onRequest(context) {
     const requireAdmin = () => { if (!isAdmin) throw 'admin'; };
     try {
       if (p === '/api/state' && method === 'GET') {
+        // Gather per-student activity/commands from their own keys.
+        const activity = {}, commands = {};
+        await Promise.all(state.students.map(async st => {
+          const a = await getAct(env, st.id); if (a) { activity[st.id] = a; st.lastSeen = a.at; }
+          const c = await env.SAFETYWISE_KV.get('cmd:' + st.id, 'json'); if (c) commands[st.id] = c;
+        }));
+        const seenAt = Number(await env.SAFETYWISE_KV.get('alertsSeenAt')) || 0;
+        const alerts = (await getAlerts(env)).map(a => ({ ...a, seen: a.at <= seenAt }));
         return json({
           me: { username: user.username, role: user.role },
           admins: state.admins.map(a => ({ id: a.id, username: a.username, name: a.name, isOwner: a.isOwner })),
@@ -150,7 +168,7 @@ export async function onRequest(context) {
           students: state.students, classes: state.classes, filters: state.filters,
           categories: state.categories, alertKeywords: state.alertKeywords, filterMode: state.filterMode || 'blacklist',
           scenes: state.scenes || [], activeScene: state.activeScene || null,
-          activity: state.activity, commands: state.commands, alerts: state.alerts.slice(0, 100),
+          activity, commands, alerts,
           enrollToken: isAdmin ? state.enrollToken : undefined
         });
       }
@@ -173,7 +191,8 @@ export async function onRequest(context) {
       }
       if (p.match(/^\/api\/students\/[^/]+$/) && method === 'DELETE') {
         requireAdmin(); const id = p.split('/').pop();
-        state.students = state.students.filter(s => s.id !== id); delete state.activity[id]; delete state.commands[id];
+        state.students = state.students.filter(s => s.id !== id);
+        await delStudentKeys(env, id);
         await saveState(env, state); return json({ ok: true });
       }
       if (p === '/api/classes' && method === 'POST') {
@@ -238,14 +257,14 @@ export async function onRequest(context) {
       if (p === '/api/command' && method === 'POST') {
         const sid = body.studentId;
         if (!state.students.find(s => s.id === sid)) return json({ error: 'unknown student' }, 404);
-        const cmd = state.commands[sid] || {};
+        const cmd = await getCmd(env, sid);
         if ('lock' in body) cmd.lock = !!body.lock;
         if ('message' in body) cmd.message = String(body.message || '');
         if ('closeTab' in body) cmd.closeTab = !!body.closeTab;
         if ('unlink' in body) cmd.unlink = !!body.unlink;
         if ('focusTab' in body) cmd.focusTab = body.focusTab || null;
         if ('lockedTabs' in body) cmd.lockedTabs = Array.isArray(body.lockedTabs) && body.lockedTabs.length ? body.lockedTabs.map(x => String(x).trim()).filter(Boolean) : null;
-        state.commands[sid] = cmd; await saveState(env, state); return json({ ok: true, command: cmd });
+        await putCmd(env, sid, cmd); return json({ ok: true, command: cmd });
       }
       if (p === '/api/admins' && method === 'POST') {
         requireAdmin();
@@ -255,7 +274,7 @@ export async function onRequest(context) {
         state.admins.push(a); await saveState(env, state); return json({ id: a.id });
       }
       if (p === '/api/alerts/seen' && method === 'POST') {
-        state.alerts.forEach(a => { a.seen = true; }); await saveState(env, state); return json({ ok: true });
+        await env.SAFETYWISE_KV.put('alertsSeenAt', String(Date.now())); return json({ ok: true });
       }
       return json({ error: 'no such endpoint' }, 404);
     } catch (e) {
