@@ -192,8 +192,8 @@ function renderStudents() {
       <td>${esc(st.name)}</td>
       <td><code style="font-size:13px">${esc(st.code || '—')}</code> ${st.code ? `<button class="sm ghost" data-copy="${esc(st.code)}">Copy</button>` : ''}</td>
       <td>${esc(className(st.classId))}</td>
-      <td><span class="dot ${online(st) ? 'on' : 'off'}"></span> ${online(st) ? 'online' : 'offline'}${st.deviceId ? ' · device linked' : ''}</td>
-      ${admin ? `<td><button class="sm danger" data-del="${st.id}">Remove</button></td>` : ''}</tr>`).join('') || `<tr><td colspan="${admin ? 5 : 4}" class="muted">No students.</td></tr>`}
+      <td><span class="dot ${online(st) ? 'on' : 'off'}"></span> ${online(st) ? 'online' : 'offline'}${st.deviceId ? ' · <span style="color:var(--ok)">device linked</span>' : ''}</td>
+      ${admin ? `<td class="row" style="gap:6px;justify-content:flex-end">${st.deviceId ? `<button class="sm ghost" data-unlink="${st.id}">Unlink</button>` : ''}<button class="sm danger" data-del="${st.id}">Remove</button></td>` : ''}</tr>`).join('') || `<tr><td colspan="${admin ? 5 : 4}" class="muted">No students.</td></tr>`}
     </tbody></table>
     <p class="muted" style="font-size:12px;margin-top:10px">Give each student's <strong>enrollment code</strong> to the SafetyWise extension on their device (extension popup → Enrollment code). The device then links to that student and appears in Live classroom.</p></div>`;
   if (admin) {
@@ -203,6 +203,7 @@ function renderStudents() {
       toast('Student added'); await refresh();
     };
     main.querySelectorAll('button[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Remove student?')) return; await api('/api/students/' + b.dataset.del, 'DELETE'); toast('Removed'); await refresh(); });
+    main.querySelectorAll('button[data-unlink]').forEach(b => b.onclick = async () => { if (!confirm('Unlink this device? The extension will reset and can be set up again with a code.')) return; await api('/api/command', 'POST', { studentId: b.dataset.unlink, unlink: true }); toast('Device will unlink on next check-in'); await refresh(); });
   }
   main.querySelectorAll('button[data-copy]').forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copy); toast('Code copied: ' + b.dataset.copy); } catch { toast(b.dataset.copy); } });
 }

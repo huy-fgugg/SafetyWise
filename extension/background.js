@@ -19,6 +19,8 @@ async function getConfig() {
 async function enroll() {
   const c = await getConfig();
   if (c.studentId) { studentId = c.studentId; return studentId; }
+  // Not set up yet: wait until an enrollment code (or email/name) is entered in the popup.
+  if (!c.studentCode && !c.studentEmail && !c.studentName) return null;
   try {
     const r = await fetch(c.serverUrl + '/api/agent/enroll', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -86,7 +88,19 @@ function startCaptureLoop() {
 }
 function stopCaptureLoop() { if (captureLoop) { clearTimeout(captureLoop); captureLoop = null; } }
 
+// Release this device: clear stored enrollment so the popup returns to setup.
+async function doUnlink() {
+  stopCaptureLoop();
+  studentId = null;
+  try { await chrome.storage.local.clear(); } catch (e) {}
+  // notify student overlay to clear
+  const tabs = await chrome.tabs.query({});
+  for (const t of tabs) { if (t.id && /^https?:/.test(t.url || '')) { try { await chrome.tabs.sendMessage(t.id, { type: 'sw-state', lock: false, message: '' }); } catch {} } }
+}
+
 async function applyCommands(cmd, tabId, url) {
+  // Unlink: admin released this device — clear everything and return to setup.
+  if (cmd.unlink) { await doUnlink(); return; }
   // Block current page
   if (cmd.block && tabId != null && url && !url.startsWith(chrome.runtime.getURL(''))) {
     const dest = chrome.runtime.getURL('blocked.html') + '?u=' + encodeURIComponent(url) + '&r=' + encodeURIComponent(cmd.block.note || 'Blocked');

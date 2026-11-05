@@ -103,8 +103,12 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/agent/enroll' && method === 'POST') {
     const b = await readBody(req);
     let student = null;
-    if (b.code) student = state.students.find(s => s.code && s.code.toUpperCase() === String(b.code).trim().toUpperCase());
-    else if (b.email) student = state.students.find(s => s.email && b.email && s.email.toLowerCase() === b.email.toLowerCase());
+    if (b.code) {
+      student = state.students.find(s => s.code && s.code.toUpperCase() === String(b.code).trim().toUpperCase());
+      if (!student) return send(res, 403, { error: 'invalid enrollment code' });
+    } else if (b.email) {
+      student = state.students.find(s => s.email && b.email && s.email.toLowerCase() === b.email.toLowerCase());
+    }
     if (!student) {
       if (b.token !== state.enrollToken) return send(res, 403, { error: 'invalid enrollment code' });
       student = { id: uid('s'), code: genCode(), name: b.name || b.email || 'Unknown device', email: b.email || '', classId: b.classId || '', createdAt: Date.now() };
@@ -137,9 +141,10 @@ const server = http.createServer(async (req, res) => {
     const cmd = state.commands[sid] || {};
     const capture = !!(state.watchUntil && Date.now() < state.watchUntil);
     // consume one-shot commands
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture };
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture, unlink: !!cmd.unlink };
     if (cmd.closeTab) { cmd.closeTab = false; }
     if (cmd.message) { cmd.message = ''; }
+    if (cmd.unlink) { cmd.unlink = false; student.deviceId = null; }
     state.commands[sid] = cmd;
     db.save();
     return send(res, 200, out);
@@ -266,6 +271,7 @@ const server = http.createServer(async (req, res) => {
       if ('lock' in b) cmd.lock = !!b.lock;
       if ('message' in b) cmd.message = String(b.message || '');
       if ('closeTab' in b) cmd.closeTab = !!b.closeTab;
+      if ('unlink' in b) cmd.unlink = !!b.unlink;
       state.commands[sid] = cmd; db.save();
       return send(res, 200, { ok: true, command: cmd });
     }

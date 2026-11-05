@@ -91,10 +91,14 @@ export async function onRequest(context) {
   if (p === '/api/agent/enroll' && method === 'POST') {
     let student = null;
     // Primary path: link to a student the admin created, by enrollment code.
-    if (body.code) student = state.students.find(s => s.code && s.code.toUpperCase() === String(body.code).trim().toUpperCase());
-    else if (body.email) student = state.students.find(s => s.email && body.email && s.email.toLowerCase() === body.email.toLowerCase());
+    if (body.code) {
+      student = state.students.find(s => s.code && s.code.toUpperCase() === String(body.code).trim().toUpperCase());
+      if (!student) return json({ error: 'invalid enrollment code' }, 403); // bad code: never auto-create
+    } else if (body.email) {
+      student = state.students.find(s => s.email && body.email && s.email.toLowerCase() === body.email.toLowerCase());
+    }
     if (!student) {
-      // No matching student. Only auto-create if the shared enroll token is given (legacy/testing).
+      // No code given. Only auto-create if the shared enroll token is present (legacy/testing).
       if (body.token !== state.enrollToken) return json({ error: 'invalid enrollment code' }, 403);
       student = { id: uid('s'), code: genCode(), name: body.name || body.email || 'Unknown device', email: body.email || '', classId: body.classId || '', createdAt: Date.now() };
       state.students.push(student);
@@ -118,9 +122,10 @@ export async function onRequest(context) {
     const cmd = state.commands[sid] || {};
     const watch = await env.SAFETYWISE_KV.get('watch');
     const capture = !!(watch && Date.now() < Number(watch));
-    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture };
+    const out = { block: reason, lock: !!cmd.lock, message: cmd.message || '', closeTab: !!cmd.closeTab, capture, unlink: !!cmd.unlink };
     if (cmd.closeTab) cmd.closeTab = false;
     if (cmd.message) cmd.message = '';
+    if (cmd.unlink) { cmd.unlink = false; student.deviceId = null; } // release the device
     state.commands[sid] = cmd;
     await saveState(env, state);
     return json(out);
@@ -214,6 +219,7 @@ export async function onRequest(context) {
         if ('lock' in body) cmd.lock = !!body.lock;
         if ('message' in body) cmd.message = String(body.message || '');
         if ('closeTab' in body) cmd.closeTab = !!body.closeTab;
+        if ('unlink' in body) cmd.unlink = !!body.unlink;
         state.commands[sid] = cmd; await saveState(env, state); return json({ ok: true, command: cmd });
       }
       if (p === '/api/admins' && method === 'POST') {
