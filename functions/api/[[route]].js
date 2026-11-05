@@ -21,6 +21,7 @@ function defaults() {
 }
 
 function uid(p) { return p + '_' + crypto.randomUUID().slice(0, 12); }
+function genCode() { return 'SW-' + crypto.randomUUID().replace(/[^a-z0-9]/gi, '').slice(0, 6).toUpperCase(); }
 
 async function loadState(env) {
   let s = await env.SAFETYWISE_KV.get(STATE_KEY, 'json');
@@ -80,12 +81,17 @@ export async function onRequest(context) {
 
   // ---- Agent (extension) ----
   if (p === '/api/agent/enroll' && method === 'POST') {
-    if (body.token !== state.enrollToken) return json({ error: 'bad enroll token' }, 403);
-    let student = state.students.find(s => s.email && body.email && s.email.toLowerCase() === body.email.toLowerCase());
+    let student = null;
+    // Primary path: link to a student the admin created, by enrollment code.
+    if (body.code) student = state.students.find(s => s.code && s.code.toUpperCase() === String(body.code).trim().toUpperCase());
+    else if (body.email) student = state.students.find(s => s.email && body.email && s.email.toLowerCase() === body.email.toLowerCase());
     if (!student) {
-      student = { id: uid('s'), name: body.name || body.email || 'Unknown device', email: body.email || '', classId: body.classId || '', createdAt: Date.now() };
+      // No matching student. Only auto-create if the shared enroll token is given (legacy/testing).
+      if (body.token !== state.enrollToken) return json({ error: 'invalid enrollment code' }, 403);
+      student = { id: uid('s'), code: genCode(), name: body.name || body.email || 'Unknown device', email: body.email || '', classId: body.classId || '', createdAt: Date.now() };
       state.students.push(student);
     }
+    if (!student.code) student.code = genCode();
     student.deviceId = body.deviceId || student.deviceId;
     student.lastSeen = Date.now();
     await saveState(env, state);
@@ -142,8 +148,8 @@ export async function onRequest(context) {
       if (p === '/api/students' && method === 'POST') {
         requireAdmin();
         if (!body.name) return json({ error: 'name required' }, 400);
-        const s = { id: uid('s'), name: body.name, email: body.email || '', classId: body.classId || '', createdAt: Date.now() };
-        state.students.push(s); await saveState(env, state); return json({ id: s.id });
+        const s = { id: uid('s'), code: genCode(), name: body.name, email: body.email || '', classId: body.classId || '', createdAt: Date.now() };
+        state.students.push(s); await saveState(env, state); return json({ id: s.id, code: s.code });
       }
       if (p.match(/^\/api\/students\/[^/]+$/) && method === 'DELETE') {
         requireAdmin(); const id = p.split('/').pop();

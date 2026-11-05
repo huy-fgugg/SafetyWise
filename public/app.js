@@ -128,12 +128,15 @@ function renderStudents() {
         <div><label>Class</label><select id="stClass"><option value="">—</option>${s.classes.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
         <div><button id="addSt">Add</button></div>
       </div></div>` : ''}
-    <div class="card"><table><thead><tr><th>Name</th><th>Email</th><th>Class</th><th>Status</th>${admin ? '<th></th>' : ''}</tr></thead><tbody>
+    <div class="card"><table><thead><tr><th>Name</th><th>Enrollment code</th><th>Class</th><th>Status</th>${admin ? '<th></th>' : ''}</tr></thead><tbody>
     ${s.students.map(st => `<tr>
-      <td>${esc(st.name)}</td><td class="muted">${esc(st.email || '—')}</td><td>${esc(className(st.classId))}</td>
-      <td><span class="dot ${online(st) ? 'on' : 'off'}"></span> ${online(st) ? 'online' : 'offline'}</td>
+      <td>${esc(st.name)}</td>
+      <td><code style="font-size:13px">${esc(st.code || '—')}</code> ${st.code ? `<button class="sm ghost" data-copy="${esc(st.code)}">Copy</button>` : ''}</td>
+      <td>${esc(className(st.classId))}</td>
+      <td><span class="dot ${online(st) ? 'on' : 'off'}"></span> ${online(st) ? 'online' : 'offline'}${st.deviceId ? ' · device linked' : ''}</td>
       ${admin ? `<td><button class="sm danger" data-del="${st.id}">Remove</button></td>` : ''}</tr>`).join('') || `<tr><td colspan="${admin ? 5 : 4}" class="muted">No students.</td></tr>`}
-    </tbody></table></div>`;
+    </tbody></table>
+    <p class="muted" style="font-size:12px;margin-top:10px">Give each student's <strong>enrollment code</strong> to the SafetyWise extension on their device (extension popup → Enrollment code). The device then links to that student and appears in Live classroom.</p></div>`;
   if (admin) {
     document.getElementById('addSt').onclick = async () => {
       const name = stName.value.trim(); if (!name) return toast('Name required');
@@ -142,6 +145,7 @@ function renderStudents() {
     };
     main.querySelectorAll('button[data-del]').forEach(b => b.onclick = async () => { if (!confirm('Remove student?')) return; await api('/api/students/' + b.dataset.del, 'DELETE'); toast('Removed'); await refresh(); });
   }
+  main.querySelectorAll('button[data-copy]').forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(b.dataset.copy); toast('Code copied: ' + b.dataset.copy); } catch { toast(b.dataset.copy); } });
 }
 
 function renderClasses() {
@@ -221,9 +225,11 @@ function renderSetup() {
   const origin = location.origin;
   main.innerHTML = head('Extension setup') + `
     <div class="card section"><h3>Enroll devices with the SafetyWise extension</h3>
-    <p class="muted">Install the SafetyWise Chrome extension on managed/school devices. On managed Chromebooks you would push it via the Google Admin console; for testing, load it unpacked. Configure it with the values below.</p>
+    <p class="muted">1. In <strong>Students</strong>, add a student — each one gets an <strong>enrollment code</strong> (e.g. SW-AB12CD).<br>
+    2. Install the SafetyWise extension on that student's device (load unpacked for testing, or push via Google Admin console on managed Chromebooks).<br>
+    3. Open the extension popup, enter the <strong>Server URL</strong> and the student's <strong>enrollment code</strong>, and click Save &amp; enroll. The device links to that student and appears in Live classroom.</p>
     <label>Server URL</label><input readonly value="${esc(origin)}">
-    <label>Enrollment token</label><input readonly value="${esc(s.enrollToken || '')}">
+    <label>Shared enroll token (optional fallback — only needed to auto-create a device without a code)</label><input readonly value="${esc(s.enrollToken || '')}">
     <p class="muted" style="font-size:12px;margin-top:12px">The extension reports the active tab and open-tab count to this console and enforces the web-filter rules and lock/message commands you set. It is intended for school-owned, consented devices only.</p>
     </div>
     <div class="card"><h3>Add another admin</h3><div class="form-inline">

@@ -5,9 +5,10 @@ let studentId = null;
 let lockOverlayTabs = new Set();
 
 async function getConfig() {
-  const stored = await chrome.storage.local.get(['serverUrl', 'enrollToken', 'studentEmail', 'studentName', 'studentId']);
+  const stored = await chrome.storage.local.get(['serverUrl', 'studentCode', 'enrollToken', 'studentEmail', 'studentName', 'studentId']);
   return {
     serverUrl: (stored.serverUrl || SW_DEFAULTS.serverUrl).replace(/\/$/, ''),
+    studentCode: stored.studentCode || SW_DEFAULTS.studentCode,
     enrollToken: stored.enrollToken || SW_DEFAULTS.enrollToken,
     studentEmail: stored.studentEmail || SW_DEFAULTS.studentEmail,
     studentName: stored.studentName || SW_DEFAULTS.studentName,
@@ -21,7 +22,7 @@ async function enroll() {
   try {
     const r = await fetch(c.serverUrl + '/api/agent/enroll', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: c.enrollToken, email: c.studentEmail, name: c.studentName, deviceId: await deviceId() })
+      body: JSON.stringify({ code: c.studentCode, token: c.enrollToken, email: c.studentEmail, name: c.studentName, deviceId: await deviceId() })
     });
     if (!r.ok) return null;
     const d = await r.json();

@@ -1,4 +1,4 @@
-const fields = ['serverUrl', 'enrollToken', 'studentEmail', 'studentName'];
+const fields = ['serverUrl', 'studentCode', 'enrollToken', 'studentEmail', 'studentName'];
 chrome.runtime.sendMessage({ type: 'sw-get-config' }, cfg => {
   if (!cfg) return;
   fields.forEach(f => { if (cfg[f]) document.getElementById(f).value = cfg[f]; });

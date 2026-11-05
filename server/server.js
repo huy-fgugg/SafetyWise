@@ -16,6 +16,7 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const sessions = new Map(); // token -> { username, role, created }
 
 function uid(p) { return p + '_' + crypto.randomBytes(6).toString('hex'); }
+function genCode() { return 'SW-' + crypto.randomBytes(4).toString('hex').slice(0, 6).toUpperCase(); }
 function token() { return crypto.randomBytes(24).toString('hex'); }
 
 function send(res, code, body, headers = {}) {
@@ -104,12 +105,15 @@ const server = http.createServer(async (req, res) => {
   // ---------- Agent (extension) endpoints ----------
   if (p === '/api/agent/enroll' && method === 'POST') {
     const b = await readBody(req);
-    if (b.token !== state.enrollToken) return send(res, 403, { error: 'bad enroll token' });
-    let student = state.students.find(s => s.email && b.email && s.email.toLowerCase() === b.email.toLowerCase());
+    let student = null;
+    if (b.code) student = state.students.find(s => s.code && s.code.toUpperCase() === String(b.code).trim().toUpperCase());
+    else if (b.email) student = state.students.find(s => s.email && b.email && s.email.toLowerCase() === b.email.toLowerCase());
     if (!student) {
-      student = { id: uid('s'), name: b.name || b.email || 'Unknown device', email: b.email || '', classId: b.classId || '', createdAt: Date.now() };
+      if (b.token !== state.enrollToken) return send(res, 403, { error: 'invalid enrollment code' });
+      student = { id: uid('s'), code: genCode(), name: b.name || b.email || 'Unknown device', email: b.email || '', classId: b.classId || '', createdAt: Date.now() };
       state.students.push(student);
     }
+    if (!student.code) student.code = genCode();
     student.deviceId = b.deviceId || student.deviceId;
     student.lastSeen = Date.now();
     db.save();
@@ -187,10 +191,10 @@ const server = http.createServer(async (req, res) => {
     // ----- Students (admin only to add/remove) -----
     if (p === '/api/students' && method === 'POST') {
       if (!isAdmin) return send(res, 403, { error: 'admin only' });
-      const s = { id: uid('s'), name: b.name, email: b.email || '', classId: b.classId || '', createdAt: Date.now() };
-      if (!s.name) return send(res, 400, { error: 'name required' });
+      if (!b.name) return send(res, 400, { error: 'name required' });
+      const s = { id: uid('s'), code: genCode(), name: b.name, email: b.email || '', classId: b.classId || '', createdAt: Date.now() };
       state.students.push(s); db.save();
-      return send(res, 200, { id: s.id });
+      return send(res, 200, { id: s.id, code: s.code });
     }
     if (p.match(/^\/api\/students\/[^/]+$/) && method === 'DELETE') {
       if (!isAdmin) return send(res, 403, { error: 'admin only' });

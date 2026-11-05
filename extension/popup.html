@@ -17,12 +17,17 @@
   <div class="brand"><span class="logo">S</span> SafetyWise</div>
   <label>Console server URL</label>
   <input id="serverUrl" placeholder="https://safetywise.pages.dev">
-  <label>Enrollment token</label>
-  <input id="enrollToken">
-  <label>Student email (optional)</label>
-  <input id="studentEmail">
-  <label>Student name (optional)</label>
-  <input id="studentName">
+  <label>Enrollment code <span style="color:#22d3ee">(from dashboard → Students)</span></label>
+  <input id="studentCode" placeholder="e.g. SW-AB12CD" style="text-transform:uppercase">
+  <details style="margin-top:8px">
+    <summary style="font-size:12px;color:#8b97ad;cursor:pointer">Advanced (optional)</summary>
+    <label>Shared enroll token</label>
+    <input id="enrollToken">
+    <label>Student email</label>
+    <input id="studentEmail">
+    <label>Student name</label>
+    <input id="studentName">
+  </details>
   <button id="save">Save &amp; enroll</button>
   <div class="status" id="status"></div>
 <script src="popup.js"></script>
