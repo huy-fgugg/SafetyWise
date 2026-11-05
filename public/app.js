@@ -427,6 +427,7 @@ function renderFiltering() {
       <p class="muted" style="font-size:12px;margin-top:10px">${mode === 'whitelist'
         ? 'Whitelist is active — students can reach only the allowed sites below.'
         : 'Blacklist is active — students can reach any site except the blocked ones below.'}</p>
+      ${mode === 'whitelist' && allows.length === 0 ? '<div class="warnbar">⚠️ Whitelist is on but no sites are allowed — <strong>every site is currently blocked</strong> for students. Add allowed sites below, or switch to Blacklist.</div>' : ''}
     </div>
 
     <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px" class="section">
